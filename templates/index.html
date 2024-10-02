@@ -1,26 +1,42 @@
+<!-- templates/index.html -->
+
 <!DOCTYPE html>
 <html>
 <head>
     <title>Custom QR Code Reader</title>
     <style>
-        body { font-family: Arial, sans-serif; margin: 50px; }
-        .container { max-width: 500px; margin: auto; }
-        input[type="file"] { display: block; margin-bottom: 20px; }
-        button { padding: 10px 20px; }
-        #result { margin-top: 20px; }
+        body { font-family: Arial, sans-serif; margin: 50px; background-color: #f2f2f2; }
+        .container { max-width: 600px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1); }
+        h1 { text-align: center; }
+        form { margin-bottom: 30px; }
+        input[type="file"], input[type="text"] { width: 100%; padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; }
+        button { padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background-color: #45a049; }
+        #result { margin-top: 20px; padding: 10px; background-color: #e7f3fe; border-left: 6px solid #2196F3; }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>Custom QR Code Reader</h1>
+
+        <h2>Decode QR Code</h2>
         <form id="decode-form" enctype="multipart/form-data">
             <input type="file" name="qr_image" accept="image/png, image/jpeg" required>
             <button type="submit">Decode QR Code</button>
         </form>
-        <div id="result"></div>
+
+        <h2>Encode QR Code</h2>
+        <form id="encode-form" enctype="multipart/form-data">
+            <input type="text" name="data" placeholder="Enter text to encode" required>
+            <button type="submit">Encode to QR Code</button>
+        </form>
+
+        <div id="decode-result"></div>
+        <div id="encode-result"></div>
     </div>
 
     <script>
+        // Handle Decode Form Submission
         document.getElementById('decode-form').addEventListener('submit', async function(e) {
             e.preventDefault();
             const formData = new FormData(this);
@@ -29,11 +45,31 @@
                 body: formData
             });
             const result = await response.json();
-            const resultDiv = document.getElementById('result');
+            const resultDiv = document.getElementById('decode-result');
             if (response.ok) {
-                resultDiv.innerHTML = `<h3>Decoded String:</h3><pre>${result.decoded_string}</pre>`;
+                resultDiv.innerHTML = `<div id="result"><h3>Decoded String:</h3><pre>${result.decoded_string}</pre></div>`;
             } else {
-                resultDiv.innerHTML = `<h3>Error:</h3><p>${result.error}</p>`;
+                resultDiv.innerHTML = `<div id="result"><h3>Error:</h3><p>${result.error}</p></div>`;
+            }
+        });
+
+        // Handle Encode Form Submission
+        document.getElementById('encode-form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const formData = new FormData(this);
+            const response = await fetch('/encode', {
+                method: 'POST',
+                body: formData
+            });
+            if (response.ok) {
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                const resultDiv = document.getElementById('encode-result');
+                resultDiv.innerHTML = `<div id="result"><h3>Encoded QR Code:</h3><a href="${url}" download="encoded_qr.png">Download QR Code</a><br><img src="${url}" alt="Encoded QR Code"></div>`;
+            } else {
+                const result = await response.json();
+                const resultDiv = document.getElementById('encode-result');
+                resultDiv.innerHTML = `<div id="result"><h3>Error:</h3><p>${result.error}</p></div>`;
             }
         });
     </script>
