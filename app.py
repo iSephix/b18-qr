@@ -1,4 +1,6 @@
-from flask import Flask, request, jsonify, render_template
+# app.py
+
+from flask import Flask, request, jsonify, render_template, send_file
 import numpy as np
 import galois
 from PIL import Image, ImageDraw
@@ -11,6 +13,7 @@ from sympy import Eq, solve
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
 import io
+import os
 
 app = Flask(__name__)
 
@@ -75,9 +78,9 @@ color_rgb_map = {
     'background': (255, 255, 255)
 }
 
-def encode_string(input_string, output_image='output.png'):
+def encode_string(input_string):
     """
-    Encode a string into a list of symbol pairs and create an image with ECC.
+    Encode a string into a list of symbol pairs and return the symbol pairs.
     """
     # Define the marker byte map
     marker_byte_map = {
@@ -138,24 +141,26 @@ def encode_string(input_string, output_image='output.png'):
 
             if marker == '<encrypt_method>':
                 index += 1
-                method_token = tokens[index]
-                stored_encrypt_method = method_token.strip()
-                # No need to encrypt method token
-                method_bytes = method_token.encode('utf-8')
-                byte_list.extend(method_bytes)
-                # Append end marker
-                end_marker_byte = marker_byte_map['</encrypt_method>']
-                byte_list.append(end_marker_byte)
+                if index < len(tokens):
+                    method_token = tokens[index]
+                    stored_encrypt_method = method_token.strip()
+                    # No need to encrypt method token
+                    method_bytes = method_token.encode('utf-8')
+                    byte_list.extend(method_bytes)
+                    # Append end marker
+                    end_marker_byte = marker_byte_map['</encrypt_method>']
+                    byte_list.append(end_marker_byte)
             elif marker == '<encrypt_key>':
                 index += 1
-                key_token = tokens[index]
-                stored_encrypt_key = key_token.strip()
-                # No need to encrypt key token
-                key_bytes = key_token.encode('utf-8')
-                byte_list.extend(key_bytes)
-                # Append end marker
-                end_marker_byte = marker_byte_map['</encrypt_key>']
-                byte_list.append(end_marker_byte)
+                if index < len(tokens):
+                    key_token = tokens[index]
+                    stored_encrypt_key = key_token.strip()
+                    # No need to encrypt key token
+                    key_bytes = key_token.encode('utf-8')
+                    byte_list.extend(key_bytes)
+                    # Append end marker
+                    end_marker_byte = marker_byte_map['</encrypt_key>']
+                    byte_list.append(end_marker_byte)
             elif marker == '<encrypt>':
                 is_encrypting = True
             elif marker == '</encrypt>':
@@ -199,7 +204,10 @@ def encode_string(input_string, output_image='output.png'):
     symbols_list_extended = symbol_list + [special_symbol]  # Indices 0-18
     symbol_list_final = []
     for idx in codeword_indices:
-        symbol = symbols_list_extended[idx]
+        if idx < len(symbols_list_extended):
+            symbol = symbols_list_extended[idx]
+        else:
+            symbol = special_symbol  # Fallback to special_symbol if index is out of range
         symbol_list_final.append(symbol)
 
     # Ensure even number of symbols for pairing
@@ -212,8 +220,6 @@ def encode_string(input_string, output_image='output.png'):
         pair = (symbol_list_final[i], symbol_list_final[i+1])
         symbol_pairs.append(pair)
 
-    # Create the image from the symbol pairs
-    create_image(symbol_pairs, filename=output_image)
     return symbol_pairs
 
 def get_marker_pattern():
@@ -229,9 +235,10 @@ def get_marker_pattern():
     ]
     return marker_pattern
 
-def create_image(symbol_pairs, filename='output.png'):
+def create_image(symbol_pairs, output_image=None):
     """
     Create an image from the list of symbol pairs, including markers.
+    If output_image is None, return the image object instead of saving.
     """
     # Define marker pattern
     marker_pattern = get_marker_pattern()
@@ -315,9 +322,16 @@ def create_image(symbol_pairs, filename='output.png'):
                 ]
                 draw.polygon(points, fill=color_rgb)
 
-    # Save the image
-    image.save(filename)
-    print(f"Image saved as {filename}")
+    if output_image:
+        # If output_image is a string, save to file
+        if isinstance(output_image, str):
+            image.save(output_image)
+            print(f"Image saved as {output_image}")
+        else:
+            # Assume output_image is a BytesIO object
+            image.save(output_image, format='PNG')
+    else:
+        return image
 
 def encrypt_data(data, key):
     """
@@ -471,7 +485,6 @@ def identify_symbol(cell_image):
 
     return (detected_color, detected_shape)
 
-# Modify the decode_image function to accept PIL Image instead of filename
 def decode_image_pil(image):
     """
     Decode a PIL Image back into the original string using ECC.
@@ -661,7 +674,7 @@ def decode_image_pil(image):
             # End marker
             if is_encrypting and byte_value == marker_byte_map['</encrypt>']:
                 if stored_encrypt_method == 'AES' and stored_encrypt_key is not None:
-                    decrypted_data = decrypt_data(bytes(content_buffer), stored_encrypt_key)
+                    decrypted_data = decrypt_data(content_buffer, stored_encrypt_key)
                     output_string += decrypted_data.decode('utf-8', errors='replace')
                 else:
                     raise ValueError("Encryption method or key not specified properly.")
@@ -706,7 +719,7 @@ def home():
     return render_template('index.html')
 
 @app.route('/decode', methods=['POST'])
-def decode():
+def decode_route():
     if 'qr_image' not in request.files:
         return jsonify({'error': 'No image uploaded.'}), 400
 
@@ -729,20 +742,19 @@ def decode():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-# Optionally, you can add an encoding endpoint
 @app.route('/encode', methods=['POST'])
-def encode():
+def encode_route():
     data = request.form.get('data')
     if not data:
         return jsonify({'error': 'No data provided to encode.'}), 400
 
     try:
         # Encode the string and create the image in memory
-        symbol_pairs = encode_string(data, output_image=None)  # Modify encode_string to handle in-memory images
+        symbol_pairs = encode_string(data)
 
-        # Instead of saving to a file, save to a BytesIO object
+        # Create image in memory using BytesIO
         img_io = io.BytesIO()
-        create_image(symbol_pairs, filename=img_io)
+        create_image(symbol_pairs, output_image=img_io)
         img_io.seek(0)
 
         return send_file(img_io, mimetype='image/png', as_attachment=True, attachment_filename='encoded_qr.png')
@@ -750,5 +762,5 @@ def encode():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == "__main__":
-    app.run(debug=True)
-    app.run(host='0.0.0.0', port=5000)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
