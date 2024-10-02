@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Custom QR Code Reader</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 50px; }
+        .container { max-width: 500px; margin: auto; }
+        input[type="file"] { display: block; margin-bottom: 20px; }
+        button { padding: 10px 20px; }
+        #result { margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Custom QR Code Reader</h1>
+        <form id="decode-form" enctype="multipart/form-data">
+            <input type="file" name="qr_image" accept="image/png, image/jpeg" required>
+            <button type="submit">Decode QR Code</button>
+        </form>
+        <div id="result"></div>
+    </div>
+
+    <script>
+        document.getElementById('decode-form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const formData = new FormData(this);
+            const response = await fetch('/decode', {
+                method: 'POST',
+                body: formData
+            });
+            const result = await response.json();
+            const resultDiv = document.getElementById('result');
+            if (response.ok) {
+                resultDiv.innerHTML = `<h3>Decoded String:</h3><pre>${result.decoded_string}</pre>`;
+            } else {
+                resultDiv.innerHTML = `<h3>Error:</h3><p>${result.error}</p>`;
+            }
+        });
+    </script>
+</body>
+</html>
