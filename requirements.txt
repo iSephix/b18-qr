@@ -4,4 +4,4 @@ galois
 sympy
 pycryptodome
 Pillow
-opencv-python
+opencv-python-headless
