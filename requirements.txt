@@ -1,0 +1,7 @@
+Flask
+numpy
+galois
+sympy
+pycryptodome
+Pillow
+opencv-python
