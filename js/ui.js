@@ -103,7 +103,44 @@ function setupUIEventListeners() {
     } else {
         console.warn("ui.js: One or more encoding-related UI elements (encode-button, etc.) were not found.");
     }
+
+    const clearDebugLogButton = document.getElementById('clear-debug-log-button');
+    if (clearDebugLogButton) {
+        clearDebugLogButton.addEventListener('click', function() {
+            const debugLogDiv = document.getElementById('mobile-debug-log');
+            if (debugLogDiv) {
+                debugLogDiv.innerHTML = '';
+                if(typeof logToScreen === "function") logToScreen("Debug log cleared by user."); // Log this action itself
+                else console.log("Debug log cleared by user.");
+            }
+        });
+    } else {
+        console.warn("ui.js: Clear debug log button ('clear-debug-log-button') not found.");
+    }
+
 } // end setupUIEventListeners
+
+
+/**
+ * Logs a message to both the console and a dedicated on-screen debug div.
+ * Prepends a timestamp to the message.
+ * @param {String} message - The message to log.
+ */
+function logToScreen(message) {
+    console.log(message); // Keep console logging
+
+    const debugLogDiv = document.getElementById('mobile-debug-log');
+    if (debugLogDiv) {
+        const timestamp = new Date().toLocaleTimeString();
+        const newLogEntry = document.createElement('div');
+        newLogEntry.textContent = `[${timestamp}] ${message}`;
+        debugLogDiv.appendChild(newLogEntry);
+        // Scroll to the bottom
+        debugLogDiv.scrollTop = debugLogDiv.scrollHeight;
+    }
+}
+window.logToScreen = logToScreen; // Make it globally accessible
+
 
 /**
  * Updates the content of the decoding result display area.
