@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Custom Visual Code Tool</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f2f2f2; display: flex; flex-direction: column; align-items: center; }
+        .container { max-width: 800px; width: 100%; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1); margin-bottom: 20px; }
+        h1, h2 { text-align: center; }
+        .section { margin-bottom: 30px; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input[type="file"], input[type="text"], textarea { width: calc(100% - 22px); padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        textarea { min-height: 80px; resize: vertical; }
+        button { padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; margin-right: 10px; }
+        button:hover { background-color: #45a049; }
+        button.secondary { background-color: #007bff; }
+        button.secondary:hover { background-color: #0056b3; }
+        button.warning { background-color: #ffc107; color: black;}
+        button.warning:hover { background-color: #e0a800;}
+        #decode-result, #encode-result-display { margin-top: 15px; padding: 10px; background-color: #e7f3fe; border-left: 6px solid #2196F3; min-height: 50px; word-wrap: break-word; white-space: pre-wrap; }
+        #qrCanvas { border:1px solid #777; margin-top:10px; display:none; max-width: 100%; height: auto; }
+        .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite; display: none; margin: 10px auto; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        #debugCanvas { border:1px dotted #ccc; margin-top:10px; display:none; }
+    </style>
+    <script async src="https://docs.opencv.org/4.x/opencv.js" id="opencv-script"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/14.2.1/math.min.js"></script>
+</head>
+<body>
+    <h1>Custom Visual Code - JS Tool</h1>
+
+    <div class="container">
+        <h2>Testing & Debugging</h2>
+        <button id="run-tests-button" class="warning">Run Internal JS Tests</button>
+        <p>Test results will appear in the browser console and a summary in the decode area below.</p>
+        <canvas id="debugCanvas" width="300" height="300" style="max-width:300px;"></canvas>
+    </div>
+    <div class="container">
+        <h2>Encode Text to Code</h2>
+        <div class="section">
+            <label for="encode-data-input">Text to Encode:</label>
+            <textarea id="encode-data-input" placeholder="Enter text to encode. Use tags like <linear>2x+3=7</linear>, <power>x^2=9</power>, <base64>SGVsbG8=</base64>, or for encryption: <encrypt_method>AES</encrypt_method><encrypt_key>your-secret-key</encrypt_key><encrypt>secret data</encrypt>"></textarea>
+            <button id="encode-button">Encode to Visual Code</button>
+            <div id="encode-result-display">
+                <p>Encoded image will appear below:</p>
+                <canvas id="qrCanvas"></canvas>
+                <a id="download-qr-link" href="#" download="custom_code.png" style="display:none; margin-top:10px; text-decoration: none; padding: 8px 15px; background-color: #007bff; color: white; border-radius: 4px;">Download Image</a>
+            </div>
+            <div id="encode-spinner" class="spinner"></div>
+        </div>
+    </div>
+
+    <div class="container">
+        <h2>Decode Visual Code from Image</h2>
+        <div class="section">
+            <label for="decode-file-input">Upload Image File:</label>
+            <input type="file" id="decode-file-input" accept="image/png, image/jpeg, image/bmp">
+            <button id="decode-button">Decode Visual Code</button>
+            <img id="uploaded-image-preview" src="#" alt="Uploaded Image Preview" style="display:none; max-width: 100%; margin-top:10px; border:1px solid #ccc;"/>
+            <div id="decode-result">
+                <p>Decoding results will appear here.</p>
+            </div>
+            <div id="decode-spinner" class="spinner"></div>
+        </div>
+    </div>
+
+    <script src="js/gf19.js"></script>
+    <script src="js/polynomial.js"></script>
+    <script src="js/reedsolomon.js"></script>
+    <script src="js/custom_codec.js"></script>
+    <script src="js/image_processing.js"></script>
+    <script src="js/ui.js"></script>
+    <script src="js/main.js"></script>
+</body>
+</html>
