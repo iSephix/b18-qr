@@ -33,9 +33,11 @@ const MAX_ACCEPTABLE_COLOR_DISTANCE = 150;
  * @returns {Promise<String|null>} A promise that resolves to the decoded string, or null if decoding fails.
  */
 async function decodeVisualCodeFromImage(imageElement) {
-    console.info('Starting JSFeat image processing pipeline...');
-    // updateDecodeResultUI('Processing image with JSFeat...'); // Intentionally commented, UI updates handled by caller or later
-    // updateDecodeResultUI('Processing image with JSFeat...'); // Temporarily commented
+    if (typeof window.logToScreen !== 'function') { // Fallback if logToScreen somehow isn't global
+        console.warn("logToScreen function not available. Using console.log for debug messages in image_processing.js.");
+        window.logToScreen = console.log; // Simple fallback
+    }
+    window.logToScreen("decodeVisualCodeFromImage: Processing started.");
 
     const width = imageElement.naturalWidth;
     const height = imageElement.naturalHeight;
@@ -62,15 +64,17 @@ async function decodeVisualCodeFromImage(imageElement) {
     }
 
     // Initialize JSFeat matrices
-    // jsfeat.matrix_t constructor: (columns, rows, data_type, data_buffer = undefined)
     let gray_img = new jsfeat.matrix_t(width, height, jsfeat.U8_t | jsfeat.C1_t);
     let img_u8_smooth = new jsfeat.matrix_t(width, height, jsfeat.U8_t | jsfeat.C1_t);
 
-    // Convert to grayscale
+    let decodedString = null;
+
+    try { // Wrap main JSFeat processing in a try-catch for unexpected errors
+        // Convert to grayscale
     // jsfeat.imgproc.grayscale(source_data, width, height, dest_matrix, code = 0)
     // Assuming RGBA input from canvas ImageData
     jsfeat.imgproc.grayscale(imageData.data, width, height, gray_img, jsfeat.COLOR_RGBA2GRAY);
-    console.info('Image converted to grayscale using JSFeat.');
+    window.logToScreen('JSFeat: Grayscale conversion complete.');
 
     // Apply Gaussian blur
     // jsfeat.imgproc.gaussian_blur(source_matrix, dest_matrix, kernel_size, sigma = 0)
@@ -78,65 +82,44 @@ async function decodeVisualCodeFromImage(imageElement) {
     const kernel_size = 5; // Example kernel size
     const sigma = 0;       // Auto-calculate sigma from kernel_size
     jsfeat.imgproc.gaussian_blur(gray_img, img_u8_smooth, kernel_size, sigma);
-    console.info('Grayscale image blurred using JSFeat.');
-
-    // For now, we'll log the dimensions of the processed image.
-    // The rest of the OpenCV-dependent code will remain until replaced in later steps.
-    console.log('JSFeat processed image (smooth):', img_u8_smooth.cols, 'x', img_u8_smooth.rows);
+    window.logToScreen('JSFeat: Gaussian blur complete. Smooth image: ' + img_u8_smooth.cols + 'x' + img_u8_smooth.rows);
 
     // --- Start of JSFeat Binarization ---
     const otsu_thresh_val = otsu_threshold_jsfeat(img_u8_smooth);
-    console.info('Calculated Otsu threshold:', otsu_thresh_val);
+    window.logToScreen('JSFeat: Otsu threshold calculated: ' + otsu_thresh_val);
 
     let binary_img = new jsfeat.matrix_t(width, height, jsfeat.U8_t | jsfeat.C1_t);
-    // Assuming markers are dark (low pixel values) on a light background.
-    // THRESH_BINARY_INV makes pixels < thresh white (255).
-    // So, if src_matrix.data[i] (marker pixel) <= threshold, it should be 255. This is invert = true.
     apply_threshold_jsfeat(img_u8_smooth, binary_img, otsu_thresh_val, true); // true for inverted behavior
-    console.info('Image binarized using Otsu threshold with JSFeat. Dimensions:', binary_img.cols, 'x', binary_img.rows);
+    window.logToScreen('JSFeat: Image binarized. Dimensions: ' + binary_img.cols + 'x' + binary_img.rows);
     // --- End of JSFeat Binarization ---
 
     const marker_candidates = findMarkerCandidates_jsfeat(binary_img);
-    console.info(`Found ${marker_candidates.length} initial marker candidates using JSFeat CCL.`);
-    // marker_candidates.forEach(candidate => { // Verbose logging, can be enabled for debug
-    //     console.log(`  Candidate ${candidate.label}: x=${candidate.x}, y=${candidate.y}, w=${candidate.width}, h=${candidate.height}, area=${candidate.area}, aspect_ratio=${(candidate.width/candidate.height).toFixed(2)}`);
-    // });
+    window.logToScreen("JSFeat: Initial marker candidates found: " + marker_candidates.length);
 
-    const markerPatternForVerification = [ // Simpler, color-only, for JSFeat path
+    const markerPatternForVerification = [
         ['black', 'black', 'black'],
         ['black', 'white', 'black'],
         ['black', 'black', 'black']
     ];
 
-    console.time("verifyAndFilterMarkers_jsfeat");
     const verified_markers_raw = verifyAndFilterMarkers_jsfeat(marker_candidates, img_u8_smooth, markerPatternForVerification);
-    console.timeEnd("verifyAndFilterMarkers_jsfeat");
-    console.info(`Found ${verified_markers_raw.length} markers after pattern verification.`);
+    window.logToScreen("JSFeat: Verified markers (pre-NMS): " + verified_markers_raw.length);
 
-    console.time("nonMaxSuppression_jsfeat");
     const final_jsfeat_markers = nonMaxSuppression_jsfeat(verified_markers_raw, 0.3);
-    console.timeEnd("nonMaxSuppression_jsfeat");
-    console.info(`Found ${final_jsfeat_markers.length} markers after NMS.`);
+    window.logToScreen("JSFeat: Final markers (post-NMS): " + final_jsfeat_markers.length);
 
     if (!final_jsfeat_markers || final_jsfeat_markers.length < 3) {
-        console.warn('JSFeat Path: Not enough final markers found after NMS. Need at least 3.');
+        window.logToScreen("JSFeat WARNING: <3 final markers (" + (final_jsfeat_markers ? final_jsfeat_markers.length : 0) + "). Attempting corner selection.");
         updateDecodeResultUI('Error: Could not find enough distinct markers (JSFeat). Try adjusting image or lighting.');
-        // selectCornerMarkers_jsfeat will handle < 3 markers, so we can let it proceed
-        // and it will return null, which is handled below.
     }
-    // final_jsfeat_markers.forEach(marker => { // Verbose
-    //     console.log(`  Final JSFeat Marker: x=${marker.x}, y=${marker.y}, w=${marker.width}, h=${marker.height}, area=${marker.area}`);
-    // });
 
     // --- JSFeat Global Perspective Transform ---
-    console.time("selectCornerMarkers_jsfeat");
     const selected_jsfeat_code_corners = selectCornerMarkers_jsfeat(final_jsfeat_markers, width, height);
-    console.timeEnd("selectCornerMarkers_jsfeat");
 
-    let warped_img_jsfeat = null; // Will hold the final warped image from JSFeat path
+    let warped_img_jsfeat = null;
 
     if (selected_jsfeat_code_corners) {
-        console.info("Selected JSFeat code corners:", selected_jsfeat_code_corners);
+        window.logToScreen("JSFeat: Selected code corners: TL(" + selected_jsfeat_code_corners.TL_code_corner.x + ","+selected_jsfeat_code_corners.TL_code_corner.y + "), TR, BL");
         const { TL_code_corner: TL_c, TR_code_corner: TR_c, BL_code_corner: BL_c } = selected_jsfeat_code_corners;
 
         if (TL_c && TR_c && BL_c) {
@@ -154,173 +137,40 @@ async function decodeVisualCodeFromImage(imageElement) {
             let H_global_matrix = new jsfeat.matrix_t(3, 3, jsfeat.F32_t | jsfeat.C1_t);
             let H_global_inv_matrix = new jsfeat.matrix_t(3, 3, jsfeat.F32_t | jsfeat.C1_t);
 
-            console.time("jsfeat_perspective_transform_calc");
             jsfeat.math.perspective_4point_transform(H_global_matrix, flattened_src_jsfeat, flattened_dst_jsfeat);
-            jsfeat.matmath.invert_3x3(H_global_matrix, H_global_inv_matrix); // Invert for warp_perspective
-            console.timeEnd("jsfeat_perspective_transform_calc");
+            jsfeat.matmath.invert_3x3(H_global_matrix, H_global_inv_matrix);
 
             warped_img_jsfeat = new jsfeat.matrix_t(wis, wis, jsfeat.U8_t | jsfeat.C1_t);
-
-            console.time("jsfeat_warp_perspective");
             jsfeat.imgproc.warp_perspective(img_u8_smooth, warped_img_jsfeat, H_global_inv_matrix, 0);
-            console.timeEnd("jsfeat_warp_perspective");
-
-            console.info('Global perspective transform with JSFeat complete. Warped image dimensions:', warped_img_jsfeat.cols, 'x', warped_img_jsfeat.rows);
-            // TODO: Next step is to use warped_img_jsfeat for grid symbol identification
+            window.logToScreen("JSFeat: Global perspective warp complete.");
 
             if (!warped_img_jsfeat || warped_img_jsfeat.rows === 0 || warped_img_jsfeat.cols === 0) {
-                console.error('JSFeat Path: Warped image is empty or invalid after perspective transform.');
+                window.logToScreen("JSFeat ERROR: Warped image is invalid.");
                 updateDecodeResultUI('Error: Failed to create a usable rectified image (JSFeat).');
                 hideSpinnerUI('decode-spinner');
                 return null;
             }
         } else {
-            // This path is taken if selected_jsfeat_code_corners.TL_c, TR_c, or BL_c was falsy,
-            // which shouldn't happen if selectCornerMarkers_jsfeat returns a valid object.
-            // The main null check for selected_jsfeat_code_corners handles the primary failure.
-            console.error("JSFeat corner selection failed to return all three distinct corner points within the if-block.");
+            window.logToScreen("JSFeat ERROR: Failed to select corner markers (TL, TR, or BL is null/undefined after selection).");
             updateDecodeResultUI('Error: Critical failure in corner marker processing (JSFeat).');
             hideSpinnerUI('decode-spinner');
             return null;
         }
     } else {
-        console.error("JSFeat marker corner selection failed (selectCornerMarkers_jsfeat returned null).");
+        window.logToScreen("JSFeat ERROR: Failed to select corner markers (selectCornerMarkers_jsfeat returned null).");
         updateDecodeResultUI('Error: Could not determine corner markers from found patterns (JSFeat).');
         hideSpinnerUI('decode-spinner');
         return null;
     }
-    // --- End JSFeat Global Perspective Transform ---
+        // --- End JSFeat Global Perspective Transform ---
 
-    let decodedString = null;
-
-    // If JSFeat path produced a warped image, proceed with JSFeat symbol identification
-    if (warped_img_jsfeat) { // This check is now more robust due to the check above
-        console.info("Attempting to decode symbols from JSFeat warped image...");
-        showSpinnerUI('decode-spinner'); // Show spinner before this potentially long operation
-
-        for (const gridDim of POSSIBLE_GRID_DIMS) {
-            console.info(`JSFeat Path: Attempting decode with grid dimension: ${gridDim}x${gridDim}`);
-            const singleCellSizePx = WARPED_IMAGE_SIZE / gridDim;
-            const currentSymbolsFlatIndices = [];
-
-            for (let rCell = 0; rCell < gridDim; rCell++) {
-                for (let cCell = 0; cCell < gridDim; cCell++) {
-                    const isTopLeftMarkerArea = (rCell < markerSizeCells && cCell < markerSizeCells);
-                    const isTopRightMarkerArea = (rCell < markerSizeCells && cCell >= gridDim - markerSizeCells);
-                    const isBottomLeftMarkerArea = (rCell >= gridDim - markerSizeCells && cCell < markerSizeCells);
-                    if (isTopLeftMarkerArea || isTopRightMarkerArea || isBottomLeftMarkerArea) continue;
-
-                    const xStart = Math.floor(cCell * singleCellSizePx);
-                    const yStart = Math.floor(rCell * singleCellSizePx);
-                    const cellWidth = Math.floor((cCell + 1) * singleCellSizePx) - xStart;
-                    const cellHeight = Math.floor((rCell + 1) * singleCellSizePx) - yStart;
-
-                    if (cellWidth <=0 || cellHeight <=0) continue;
-
-                    const insetRatio = 0.15;
-                    const insetPxWidth = Math.floor(cellWidth * insetRatio);
-                    const insetPxHeight = Math.floor(cellHeight * insetRatio);
-
-                    const roiX = xStart + insetPxWidth;
-                    const roiY = yStart + insetPxHeight;
-                    const roiW = Math.max(1, cellWidth - 2 * insetPxWidth);
-                    const roiH = Math.max(1, cellHeight - 2 * insetPxHeight);
-
-                    if (roiX < 0 || roiY < 0 || roiX + roiW > WARPED_IMAGE_SIZE || roiY + roiH > WARPED_IMAGE_SIZE || roiW <=0 || roiH <=0) {
-                        console.warn(`Cell ROI out of bounds: x=${roiX},y=${roiY},w=${roiW},h=${roiH} for warped_img_jsfeat (${warped_img_jsfeat.cols}x${warped_img_jsfeat.rows})`);
-                        currentSymbolsFlatIndices.push(CUST_CODEC_SYMBOL_LIST.length);
-                        continue;
-                    }
-
-                    let cell_matrix = new jsfeat.matrix_t(roiW, roiH, jsfeat.U8_t | jsfeat.C1_t);
-                    for (let r_copy = 0; r_copy < roiH; ++r_copy) {
-                        for (let c_copy = 0; c_copy < roiW; ++c_copy) {
-                            const src_idx = (roiY + r_copy) * warped_img_jsfeat.cols + (roiX + c_copy);
-                            const dst_idx = r_copy * roiW + c_copy;
-                            if (src_idx < warped_img_jsfeat.data.length && dst_idx < cell_matrix.data.length) {
-                                cell_matrix.data[dst_idx] = warped_img_jsfeat.data[src_idx];
-                            }
-                        }
-                    }
-
-                    const identifiedSymbol = identifySymbol_jsfeat(cell_matrix, CUST_CODEC_COLOR_RGB_MAP, CUST_CODEC_SYMBOL_LIST, CUST_CODEC_SPECIAL_SYMBOL);
-
-                    let symbolIndex = CUST_CODEC_SYMBOL_LIST.findIndex(s => s[0] === identifiedSymbol[0] && s[1] === identifiedSymbol[1]);
-                    if (symbolIndex === -1) {
-                        symbolIndex = CUST_CODEC_SYMBOL_LIST.length;
-                    }
-                    currentSymbolsFlatIndices.push(symbolIndex);
-                }
-            }
-
-            if (currentSymbolsFlatIndices.length === 0) {
-                console.warn(`JSFeat Path: Grid ${gridDim}: No symbols extracted.`);
-                continue;
-            }
-
-            if (typeof fullDecodePipelineFromIndices === 'function') {
-                const resultString = await fullDecodePipelineFromIndices(currentSymbolsFlatIndices);
-                if (resultString !== null && resultString !== undefined) {
-                    decodedString = resultString;
-                    console.info(`JSFeat Path: Successfully decoded with grid ${gridDim}x${gridDim}!`);
-                    break;
-                } else {
-                    console.warn(`JSFeat Path: Grid ${gridDim} decode attempt failed (pipeline returned null).`);
-                }
-            } else {
-                console.error('fullDecodePipelineFromIndices function is not available. JSFeat path cannot complete decoding.');
-                decodedString = null;
-                break;
-            }
-        }
-
-        hideSpinnerUI('decode-spinner');
-        if (decodedString) {
-             console.info("Decoding successful using JSFeat pipeline. Skipping OpenCV fallback.");
-             return decodedString;
-        } else {
-            console.warn("JSFeat pipeline could not decode the image. Will proceed to OpenCV fallback if enabled.");
-        }
-    } else {
-         console.warn("JSFeat path did not produce a warped image. Skipping JSFeat symbol identification.");
-    }
-    // --- End of JSFeat Symbol Identification and Decoding Attempt ---
-
-    // --- Original OpenCV Path (Fallback / To be removed later if JSFeat is reliable) ---
-    if (!decodedString) { // Only run OpenCV path if JSFeat path failed to decode
-        console.info("Proceeding with OpenCV path as JSFeat path did not yield a result.");
-        showSpinnerUI('decode-spinner');
-
-        let src = null, gray = null, binary = null, warpedImg = null; // OpenCV Mats
-        try {
-            src = cv.imread(imageElement);
-            gray = new cv.Mat(); cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
-            binary = new cv.Mat(); cv.adaptiveThreshold(gray, binary, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 11, 2);
-
-            const markerObjects = findMarkers_JS(binary, markerPatternJsDefinition);
-            if (!markerObjects || markerObjects.length < 3) {
-                console.warn(`OpenCV Path: Decoding failed: Could not find enough markers. Found ${markerObjects ? markerObjects.length : 0}. Need 3.`);
-                if (src && !src.isDeleted()) src.delete(); if (gray && !gray.isDeleted()) gray.delete(); if (binary && !binary.isDeleted()) binary.delete();
-                hideSpinnerUI('decode-spinner'); return null;
-            }
-
-            const cornerMarkerPoints = selectCornerMarkers_JS(markerObjects, src.cols, src.rows);
-            if (!cornerMarkerPoints) {
-               console.warn('OpenCV Path: Decoding failed: Could not select corner markers.');
-               if (src && !src.isDeleted()) src.delete(); if (gray && !gray.isDeleted()) gray.delete(); if (binary && !binary.isDeleted()) binary.delete();
-               hideSpinnerUI('decode-spinner'); return null;
-            }
-
-            warpedImg = perspectiveTransform_JS(src, cornerMarkerPoints);
-            if (!warpedImg || warpedImg.empty()) {
-                console.warn('OpenCV Path: Decoding failed: Perspective transform failed or resulted in empty image.');
-                if (src && !src.isDeleted()) src.delete(); if (gray && !gray.isDeleted()) gray.delete(); if (binary && !binary.isDeleted()) binary.delete();
-                hideSpinnerUI('decode-spinner'); return null;
-            }
-            console.info('OpenCV Path: Image warped. Identifying symbols from grid...');
+        // If JSFeat path produced a warped image, proceed with JSFeat symbol identification
+        if (warped_img_jsfeat) {
+            window.logToScreen("JSFeat: Attempting symbol identification from warped image.");
+            showSpinnerUI('decode-spinner');
 
             for (const gridDim of POSSIBLE_GRID_DIMS) {
-                console.info(`OpenCV Path: Attempting decode with grid dimension: ${gridDim}x${gridDim}`);
+                window.logToScreen("JSFeat: Trying grid: " + gridDim + "x" + gridDim);
                 const singleCellSizePx = WARPED_IMAGE_SIZE / gridDim;
                 const currentSymbolsFlatIndices = [];
 
@@ -335,60 +185,100 @@ async function decodeVisualCodeFromImage(imageElement) {
                         const yStart = Math.floor(rCell * singleCellSizePx);
                         const cellWidth = Math.floor((cCell + 1) * singleCellSizePx) - xStart;
                         const cellHeight = Math.floor((rCell + 1) * singleCellSizePx) - yStart;
+
                         if (cellWidth <=0 || cellHeight <=0) continue;
 
-                        const insetPx = Math.floor(singleCellSizePx * 0.15);
-                        const roiX = xStart + insetPx; const roiY = yStart + insetPx;
-                        const roiW = Math.max(1, cellWidth - 2 * insetPx); const roiH = Math.max(1, cellHeight - 2 * insetPx);
+                        const insetRatio = 0.15;
+                        const insetPxWidth = Math.floor(cellWidth * insetRatio);
+                        const insetPxHeight = Math.floor(cellHeight * insetRatio);
 
-                        if (roiX < 0 || roiY < 0 || roiX + roiW > warpedImg.cols || roiY + roiH > warpedImg.rows || roiW <=0 || roiH <=0) {
-                            currentSymbolsFlatIndices.push(symbolListJs.length); continue;
+                        const roiX = xStart + insetPxWidth;
+                        const roiY = yStart + insetPxHeight;
+                        const roiW = Math.max(1, cellWidth - 2 * insetPxWidth);
+                        const roiH = Math.max(1, cellHeight - 2 * insetPxHeight);
+
+                        if (roiX < 0 || roiY < 0 || roiX + roiW > WARPED_IMAGE_SIZE || roiY + roiH > WARPED_IMAGE_SIZE || roiW <=0 || roiH <=0) {
+                            window.logToScreen(`JSFeat WARN: Cell ROI out of bounds: x=${roiX},y=${roiY},w=${roiW},h=${roiH}`);
+                            currentSymbolsFlatIndices.push(CUST_CODEC_SYMBOL_LIST.length);
+                            continue;
                         }
 
-                        let cellMat_rgba_cv = null; let identifiedSymbol_cv = null;
-                        try {
-                            cellMat_rgba_cv = warpedImg.roi(new cv.Rect(roiX, roiY, roiW, roiH));
-                            identifiedSymbol_cv = cellMat_rgba_cv.empty() ? specialSymbolJs : identifySymbolJs(cellMat_rgba_cv);
-                        } catch(e) { console.error("Error in OpenCV cell ROI processing:", e.stack); identifiedSymbol_cv = specialSymbolJs; }
-                        finally { if (cellMat_rgba_cv && !cellMat_rgba_cv.isDeleted()) cellMat_rgba_cv.delete(); }
+                        let cell_matrix = new jsfeat.matrix_t(roiW, roiH, jsfeat.U8_t | jsfeat.C1_t);
+                        for (let r_copy = 0; r_copy < roiH; ++r_copy) {
+                            for (let c_copy = 0; c_copy < roiW; ++c_copy) {
+                                const src_idx = (roiY + r_copy) * warped_img_jsfeat.cols + (roiX + c_copy);
+                                const dst_idx = r_copy * roiW + c_copy;
+                                if (src_idx < warped_img_jsfeat.data.length && dst_idx < cell_matrix.data.length) {
+                                    cell_matrix.data[dst_idx] = warped_img_jsfeat.data[src_idx];
+                                }
+                            }
+                        }
 
-                        let symbolIndex_cv = symbolListJs.findIndex(s => s[0] === identifiedSymbol_cv[0] && s[1] === identifiedSymbol_cv[1]);
-                        if (symbolIndex_cv === -1) symbolIndex_cv = symbolListJs.length;
-                        currentSymbolsFlatIndices.push(symbolIndex_cv);
+                        const identifiedSymbol = identifySymbol_jsfeat(cell_matrix, CUST_CODEC_COLOR_RGB_MAP, CUST_CODEC_SYMBOL_LIST, CUST_CODEC_SPECIAL_SYMBOL);
+
+                        let symbolIndex = CUST_CODEC_SYMBOL_LIST.findIndex(s => s[0] === identifiedSymbol[0] && s[1] === identifiedSymbol[1]);
+                        if (symbolIndex === -1) {
+                            symbolIndex = CUST_CODEC_SYMBOL_LIST.length;
+                        }
+                        currentSymbolsFlatIndices.push(symbolIndex);
                     }
                 }
 
-                if (currentSymbolsFlatIndices.length === 0) { console.warn(`OpenCV Path: Grid ${gridDim}: No symbols extracted.`); continue; }
+                if (currentSymbolsFlatIndices.length === 0) {
+                    window.logToScreen(`JSFeat: No symbols extracted for grid ${gridDim}.`);
+                    continue;
+                }
 
                 if (typeof fullDecodePipelineFromIndices === 'function') {
                     const resultString = await fullDecodePipelineFromIndices(currentSymbolsFlatIndices);
                     if (resultString !== null && resultString !== undefined) {
                         decodedString = resultString;
-                        console.info(`OpenCV Path: Successfully decoded with grid ${gridDim}x${gridDim}!`);
+                        console.info(`JSFeat Path: Successfully decoded with grid ${gridDim}x${gridDim}!`);
                         break;
                     } else {
-                        console.warn(`OpenCV Path: Grid ${gridDim} decode attempt failed.`);
+                        console.warn(`JSFeat Path: Grid ${gridDim} decode attempt failed (pipeline returned null).`);
                     }
                 } else {
-                    console.error('OpenCV Path: fullDecodePipelineFromIndices function is not available.');
+                    console.error('fullDecodePipelineFromIndices function is not available. JSFeat path cannot complete decoding.');
+                    decodedString = null;
                     break;
                 }
             }
 
-            if (!decodedString) {
-                console.warn("OpenCV Path: Failed to decode with any attempted grid dimension.");
-            }
-
-        } catch (error) {
-            console.error('Error during OpenCV decoding pipeline:', error, error.stack);
-        } finally {
-            if (src && !src.isDeleted()) src.delete();
-            if (gray && !gray.isDeleted()) gray.delete();
-            if (binary && !binary.isDeleted()) binary.delete();
-            if (warpedImg && !warpedImg.isDeleted()) warpedImg.delete();
+            // This hideSpinnerUI was for the spinner shown before the gridDim loop.
             hideSpinnerUI('decode-spinner');
+            if (decodedString) {
+                 console.info("Decoding successful using JSFeat pipeline.");
+            } else {
+                // This else block is hit if the JSFeat symbol identification loop completes for all grid dimensions
+                // without successfully decoding.
+                console.warn('JSFeat Path: Decoding failed for all attempted grid dimensions.');
+                updateDecodeResultUI('Error: Could not decode symbols with any attempted grid configuration (JSFeat).');
+            }
+            return decodedString; // Return whatever JSFeat path produced (null if failed).
+        } else {
+             // This case is if warped_img_jsfeat itself is null (e.g. corner selection/warp failed)
+             // Error messages for these specific failures are now set before this point.
+             console.warn("JSFeat path did not produce a warped image; cannot proceed with symbol identification.");
+             // hideSpinnerUI is called in the error paths that lead here.
+             return null; // Ensure we return null if warping failed.
         }
+    } catch (e) {
+        console.error("Unhandled error in decodeVisualCodeFromImage JSFeat pipeline:", e.stack || e);
+        updateDecodeResultUI('Critical error during image processing: ' + e.message + '. Please check console.');
+        hideSpinnerUI('decode-spinner'); // Ensure spinner is hidden on unexpected error
+        return null; // Ensure the function returns, allowing ui.js to proceed
     }
+    // The original OpenCV path has been removed.
+    // If JSFeat path fails and doesn't return early, decodedString will be null here.
+    } catch (e) { // Catch unexpected errors from the main JSFeat pipeline
+        console.error("Unhandled error in decodeVisualCodeFromImage JSFeat pipeline:", e.stack || e);
+        updateDecodeResultUI('Critical error during image processing: ' + e.message + '. Please check console.');
+        hideSpinnerUI('decode-spinner'); // Ensure spinner is hidden on unexpected error
+        return null; // Ensure the function returns, allowing ui.js to proceed
+    }
+    // This final return is for cases where the try block completes but decodedString might still be null
+    // (e.g. all grid dimensions failed to decode, specific error message already set by then).
     return decodedString;
 }
 
