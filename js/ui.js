@@ -50,16 +50,8 @@ function setupUIEventListeners() {
                 return;
             }
 
-            // Safeguard: Check for OpenCV readiness directly before attempting to use it.
-            if (!(typeof cv !== 'undefined' && cv.imread)) {
-                 updateDecodeResult('OpenCV.js is not ready or failed to load. Please wait or check the browser console.');
-                 // Optionally, try to trigger the check from main.js if it exists
-                 if (typeof checkOpenCVStatusPoll === 'function') { // Renamed in main.js
-                    console.warn("ui.js: Attempting to trigger OpenCV status check from main.js due to UI interaction before ready state.");
-                    checkOpenCVStatusPoll();
-                 }
-                 return;
-            }
+            // OpenCV readiness check removed. JSFeat is assumed to be loaded via script tag.
+            // Math.js is also assumed to be loaded.
 
             if (typeof decodeVisualCodeFromImage === 'function') { // This function is from image_processing.js
                 decodeButton.disabled = true;
