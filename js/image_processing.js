@@ -32,7 +32,7 @@ const MAX_ACCEPTABLE_COLOR_DISTANCE = 150;
  * @param {HTMLImageElement} imageElement - The HTML image element containing the visual code.
  * @returns {Promise<String|null>} A promise that resolves to the decoded string, or null if decoding fails.
  */
-async function decodeVisualCodeFromImage(imageElement) {
+window.decodeVisualCodeFromImage = async function(imageElement) {
     if (typeof window.logToScreen !== 'function') { // Fallback if logToScreen somehow isn't global
         console.warn("logToScreen function not available. Using console.log for debug messages in image_processing.js.");
         window.logToScreen = console.log; // Simple fallback
@@ -137,12 +137,35 @@ async function decodeVisualCodeFromImage(imageElement) {
             let H_global_matrix = new jsfeat.matrix_t(3, 3, jsfeat.F32_t | jsfeat.C1_t);
             let H_global_inv_matrix = new jsfeat.matrix_t(3, 3, jsfeat.F32_t | jsfeat.C1_t);
 
+            if (window.logToScreen) {
+                window.logToScreen(`JSFeat DEBUG: Perspective Transform Src Pts: [${flattened_src_jsfeat.join(', ')}]`);
+                window.logToScreen(`JSFeat DEBUG: Perspective Transform Dst Pts: [${flattened_dst_jsfeat.join(', ')}]`);
+                window.logToScreen(`JSFeat DEBUG: H_global_matrix (before perspective_4point_transform): ${H_global_matrix.cols}x${H_global_matrix.rows}, type: ${H_global_matrix.type}`);
+            }
+
             jsfeat.math.perspective_4point_transform(H_global_matrix, flattened_src_jsfeat, flattened_dst_jsfeat);
+
+            if (window.logToScreen) {
+                window.logToScreen(`JSFeat DEBUG: H_global_matrix (after perspective_4point_transform, before invert): ${H_global_matrix.cols}x${H_global_matrix.rows}, data: [${H_global_matrix.data.slice(0,9).join(', ')}]`);
+                window.logToScreen(`JSFeat DEBUG: H_global_inv_matrix (before invert_3x3): ${H_global_inv_matrix.cols}x${H_global_inv_matrix.rows}, type: ${H_global_inv_matrix.type}`);
+            }
+
             jsfeat.matmath.invert_3x3(H_global_matrix, H_global_inv_matrix);
 
             warped_img_jsfeat = new jsfeat.matrix_t(wis, wis, jsfeat.U8_t | jsfeat.C1_t);
+
+            if (window.logToScreen) {
+                window.logToScreen(`JSFeat DEBUG: H_global_inv_matrix (after invert_3x3, before warp): ${H_global_inv_matrix.cols}x${H_global_inv_matrix.rows}, data: [${H_global_inv_matrix.data.slice(0,9).join(', ')}]`);
+                window.logToScreen(`JSFeat DEBUG: img_u8_smooth (source for warp): ${img_u8_smooth.cols}x${img_u8_smooth.rows}, type: ${img_u8_smooth.type}`);
+                window.logToScreen(`JSFeat DEBUG: warped_img_jsfeat (dest for warp, before warp): ${warped_img_jsfeat.cols}x${warped_img_jsfeat.rows}, type: ${warped_img_jsfeat.type}`);
+            }
+
             jsfeat.imgproc.warp_perspective(img_u8_smooth, warped_img_jsfeat, H_global_inv_matrix, 0);
-            window.logToScreen("JSFeat: Global perspective warp complete.");
+
+            if (window.logToScreen) {
+                window.logToScreen(`JSFeat DEBUG: warped_img_jsfeat (after warp): ${warped_img_jsfeat.cols}x${warped_img_jsfeat.rows}, first few data: [${warped_img_jsfeat.data.slice(0,10).join(', ')}]`);
+            }
+            window.logToScreen("JSFeat: Global perspective warp complete."); // This was the original log, kept for sequence.
 
             if (!warped_img_jsfeat || warped_img_jsfeat.rows === 0 || warped_img_jsfeat.cols === 0) {
                 window.logToScreen("JSFeat ERROR: Warped image is invalid.");
@@ -157,7 +180,8 @@ async function decodeVisualCodeFromImage(imageElement) {
             return null;
         }
     } else {
-        window.logToScreen("JSFeat ERROR: Failed to select corner markers (selectCornerMarkers_jsfeat returned null).");
+        // This block is executed if selectCornerMarkers_jsfeat returns null
+        if (window.logToScreen) window.logToScreen("JSFeat ERROR: Failed to select corner markers. Aborting decode pipeline.");
         updateDecodeResultUI('Error: Could not determine corner markers from found patterns (JSFeat).');
         hideSpinnerUI('decode-spinner');
         return null;
