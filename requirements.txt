@@ -1,7 +1,0 @@
-Flask
-numpy
-galois
-pycryptodome
-Pillow
-opencv-python-headless
-gunicorn
