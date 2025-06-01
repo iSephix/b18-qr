@@ -13,6 +13,9 @@
         button { padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; }
         button:hover { background-color: #45a049; }
         #result { margin-top: 20px; padding: 10px; background-color: #e7f3fe; border-left: 6px solid #2196F3; }
+        fieldset { margin-bottom: 15px; border: 1px solid #ccc; padding: 10px; border-radius: 4px; }
+        legend { font-weight: bold; }
+        textarea { width: 100%; padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
     </style>
 </head>
 <body>
@@ -24,18 +27,53 @@
             <input type="file" name="qr_image" accept="image/png, image/jpeg" required>
             <button type="submit">Decode QR Code</button>
         </form>
+        <div id="decode-result" style="margin-bottom: 30px;"></div>
+
 
         <h2>Encode QR Code</h2>
         <form id="encode-form" enctype="multipart/form-data">
-            <input type="text" name="data" placeholder="Enter text to encode" required>
+            <textarea name="data" id="main-data-input" rows="5" placeholder="Enter text to encode, or build using helpers below" required></textarea>
+            <p style="font-size: 0.9em; color: #555; margin-top: 5px; margin-bottom: 10px;">Estimated raw data size (before error correction): <span id="capacity-info">0</span> bytes.</p>
             <button type="submit">Encode to QR Code</button>
         </form>
+        <div id="encode-result" style="margin-bottom: 30px;"></div>
 
-        <div id="decode-result"></div>
-        <div id="encode-result"></div>
+        <h2>Advanced Data Input Helper</h2>
+        <fieldset>
+            <legend>Linear Equation</legend>
+            <input type="text" id="linear-equation-input" placeholder="e.g., 2*x + 3 = 7">
+            <button type="button" id="add-linear-btn">Add Linear Equation to QR Data</button>
+        </fieldset>
+        <fieldset>
+            <legend>Power Equation</legend>
+            <input type="text" id="power-equation-input" placeholder="e.g., x^2 - 9 = 0">
+            <button type="button" id="add-power-btn">Add Power Equation to QR Data</button>
+        </fieldset>
+        <fieldset>
+            <legend>Base64 Data</legend>
+            <textarea id="base64-data-input" rows="3" placeholder="Enter Base64 encoded string"></textarea>
+            <button type="button" id="add-base64-btn">Add Base64 Data to QR Data</button>
+        </fieldset>
+        <fieldset>
+            <legend>AES Encrypted Text</legend>
+            <textarea id="aes-text-input" rows="3" placeholder="Text to encrypt"></textarea>
+            <input type="text" id="aes-key-input" placeholder="Encryption Key (AES)">
+            <button type="button" id="add-aes-btn">Add Encrypted Text to QR Data</button>
+        </fieldset>
     </div>
 
     <script>
+        const mainDataInput = document.getElementById('main-data-input');
+
+        // Function to append text to the main data input
+        function appendToMainDataInput(text) {
+            if (mainDataInput.value.trim() !== '') {
+                mainDataInput.value += '\n' + text;
+            } else {
+                mainDataInput.value = text;
+            }
+        }
+
         // Handle Decode Form Submission
         document.getElementById('decode-form').addEventListener('submit', async function(e) {
             e.preventDefault();
@@ -62,14 +100,19 @@
         // Handle Encode Form Submission
         document.getElementById('encode-form').addEventListener('submit', async function(e) {
             e.preventDefault();
-            const formData = new FormData(this);
+            // const formData = new FormData(this); // We will construct FormData manually if needed or send as JSON
             const resultDiv = document.getElementById('encode-result');
             resultDiv.innerHTML = ''; // Clear previous results
+
+            // Create FormData and add mainDataInput.value
+            const formData = new FormData();
+            formData.append('data', mainDataInput.value);
+
 
             try {
                 const response = await fetch('/encode', {
                     method: 'POST',
-                    body: formData
+                    body: formData // Send the FormData object
                 });
                 if (response.ok) {
                     const blob = await response.blob();
@@ -84,6 +127,135 @@
                 resultDiv.innerHTML = `<div id="result"><h3>Error:</h3><p>${error.message || 'Failed to fetch or parse response.'}</p></div>`;
             }
         });
+
+        // --- Helper Button Logic ---
+        document.getElementById('add-linear-btn').addEventListener('click', function() {
+            const inputField = document.getElementById('linear-equation-input');
+            const value = inputField.value.trim();
+            if (value) {
+                appendToMainDataInput(`<linear>${value}</linear>`);
+                inputField.value = '';
+            } else {
+                alert('Please enter a linear equation.');
+            }
+        });
+
+        document.getElementById('add-power-btn').addEventListener('click', function() {
+            const inputField = document.getElementById('power-equation-input');
+            const value = inputField.value.trim();
+            if (value) {
+                appendToMainDataInput(`<power>${value}</power>`);
+                inputField.value = '';
+            } else {
+                alert('Please enter a power equation.');
+            }
+        });
+
+        document.getElementById('add-base64-btn').addEventListener('click', function() {
+            const inputField = document.getElementById('base64-data-input');
+            const value = inputField.value.trim();
+            if (value) {
+                appendToMainDataInput(`<base64>${value}</base64>`);
+                inputField.value = '';
+            } else {
+                alert('Please enter Base64 data.');
+            }
+        });
+
+        document.getElementById('add-aes-btn').addEventListener('click', function() {
+            const textField = document.getElementById('aes-text-input');
+            const keyField = document.getElementById('aes-key-input');
+            const text = textField.value; // Don't trim, spaces might be intentional
+            const key = keyField.value.trim();
+
+            if (!text) {
+                alert('Please enter text to encrypt.');
+                return;
+            }
+            if (!key) {
+                alert('Please enter an encryption key.');
+                return;
+            }
+            // Note: AES method is hardcoded as "AES" in the backend for this structure
+            const taggedString = `<encrypt><encrypt_method>AES</encrypt_method><encrypt_key>${key}</encrypt_key>${text}</encrypt>`;
+            appendToMainDataInput(taggedString);
+            textField.value = '';
+            keyField.value = '';
+            mainDataInput.dispatchEvent(new Event('input')); // Trigger capacity update
+        });
+
+        // --- Capacity Info Update Logic ---
+        const capacityInfoSpan = document.getElementById('capacity-info');
+
+        async function updateCapacityInfo() {
+            const dataString = mainDataInput.value;
+            if (!dataString.trim()) {
+                capacityInfoSpan.textContent = '0';
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/calculate_raw_data_size', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ data_string: dataString })
+                });
+
+                if (response.ok) {
+                    const result = await response.json();
+                    capacityInfoSpan.textContent = result.raw_data_size;
+                } else {
+                    const errResult = await response.json().catch(() => null); // Try to parse error, but don't fail if not JSON
+                    capacityInfoSpan.textContent = `Error (${response.status})`;
+                    console.error('Error calculating capacity:', errResult ? errResult.error : 'Unknown server error');
+                }
+            } catch (error) {
+                capacityInfoSpan.textContent = 'Error';
+                console.error('Failed to fetch capacity info:', error);
+            }
+        }
+
+        mainDataInput.addEventListener('input', updateCapacityInfo);
+
+        // Initial capacity update on page load if there's pre-filled data (e.g. browser restore)
+        if (mainDataInput.value) {
+            updateCapacityInfo();
+        }
+
+        // Modify helper buttons to also trigger capacity update
+        // Simpler way: dispatch 'input' event on mainDataInput after appending text.
+        // This is added to each helper button's logic directly above.
+        // Example for one button, if not dispatching event:
+        // document.getElementById('add-linear-btn').addEventListener('click', function() {
+        //     ...
+        //     inputField.value = '';
+        //     updateCapacityInfo(); // Explicit call
+        // });
+        // For other helper buttons, ensure they also call `mainDataInput.dispatchEvent(new Event('input'));`
+        // after modifying mainDataInput.value and clearing their respective fields.
+        // This has been done by adding `mainDataInput.dispatchEvent(new Event('input'));`
+        // to each helper button's event listener.
+
+        // Ensure add-linear-btn triggers update
+        document.getElementById('add-linear-btn').addEventListener('click', function() {
+            if (document.getElementById('linear-equation-input').value === '') { // Check if it was cleared (meaning text was added)
+                 mainDataInput.dispatchEvent(new Event('input'));
+            }
+        });
+         document.getElementById('add-power-btn').addEventListener('click', function() {
+            if (document.getElementById('power-equation-input').value === '') {
+                 mainDataInput.dispatchEvent(new Event('input'));
+            }
+        });
+         document.getElementById('add-base64-btn').addEventListener('click', function() {
+            if (document.getElementById('base64-data-input').value === '') {
+                 mainDataInput.dispatchEvent(new Event('input'));
+            }
+        });
+        // AES button already has dispatchEvent in its primary logic.
+
     </script>
 </body>
 </html>

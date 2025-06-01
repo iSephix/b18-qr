@@ -483,11 +483,14 @@ def process_base64_data(content_str):
     Decode base64 data and save it as an image.
     """
     try:
+        # The decoded_data is the actual image bytes.
+        # In a typical application, you might save this, return it, or process it further.
         decoded_data = base64.b64decode(content_str)
-        # Save to a file
-        with open('decoded_image.png', 'wb') as f:
-            f.write(decoded_data)
-        app.logger.info("Base64 data decoded and saved as 'decoded_image.png'")
+        # In a serverless environment like Vercel, writing to the local filesystem is ephemeral
+        # and generally not recommended for persistent storage or user-facing file delivery.
+        # If the goal was to allow users to download this image, it would typically be
+        # returned as a response from a dedicated endpoint, e.g., with a Content-Type of image/png.
+        app.logger.info("Base64 data was processed. In a serverless environment, it is not saved to a file.")
     except Exception as e:
         app.logger.error(f"Error decoding base64 data: {e}")
 
@@ -913,3 +916,72 @@ def encode_route():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
+
+@app.route('/api/calculate_raw_data_size', methods=['POST'])
+def calculate_raw_data_size_route():
+    try:
+        payload = request.get_json()
+        if not payload or 'data_string' not in payload:
+            return jsonify({'error': 'Missing data_string in request payload'}), 400
+
+        data_string = payload['data_string']
+
+        # Replicate relevant parts of encode_string's byte list generation
+        marker_byte_map = {
+            '<linear>': 257, '</linear>': 258, '<power>': 259, '</power>': 260,
+            '<base64>': 281, '</base64>': 282, '<encrypt_method>': 285, '</encrypt_method>': 286,
+            '<encrypt_key>': 287, '</encrypt_key>': 288, '<encrypt>': 289, '</encrypt>': 290,
+        }
+        marker_pattern = re.compile('|'.join(re.escape(k) for k in marker_byte_map.keys()))
+        byte_list = []
+        tokens = marker_pattern.split(data_string)
+        markers = marker_pattern.findall(data_string)
+
+        is_encrypting_content = False # Simplified flag for content within <encrypt>...</encrypt>
+
+        index = 0
+        while index < len(tokens):
+            token = tokens[index]
+
+            if is_encrypting_content:
+                # For size calculation, add byte length of raw token content
+                # This doesn't account for AES padding, but gives a raw estimate
+                byte_list.extend(list(token.encode('utf-8')))
+                is_encrypting_content = False # Reset after processing the content
+            else:
+                # Add UTF-8 bytes of normal text
+                byte_list.extend(list(token.encode('utf-8')))
+
+            if index < len(markers):
+                marker = markers[index]
+                marker_byte = marker_byte_map[marker]
+                byte_list.append(marker_byte)
+
+                if marker == '<encrypt_method>':
+                    index += 1
+                    if index < len(tokens): # Content for method
+                        method_token = tokens[index]
+                        byte_list.extend(list(method_token.encode('utf-8')))
+                elif marker == '<encrypt_key>':
+                    index += 1
+                    if index < len(tokens): # Content for key
+                        key_token = tokens[index]
+                        byte_list.extend(list(key_token.encode('utf-8')))
+                elif marker == '<encrypt>':
+                    is_encrypting_content = True # Next token is the content to be "encrypted"
+                # No need to explicitly handle </encrypt> for is_encrypting_content reset,
+                # as it's reset after the content token is processed.
+                # Other end markers like </linear> etc. are just added as bytes.
+            index += 1
+
+        # Optional: Validate byte values if strict adherence to 0-323 is needed for size calc
+        # For now, raw byte count is likely sufficient for an estimate.
+        # for byte_val in byte_list:
+        #     if not (0 <= byte_val <= 323): # Check if any are outside this range if they are special marker values
+        #         pass # Or handle as an error if markers are expected to be within this for some reason
+
+        return jsonify({'raw_data_size': len(byte_list)})
+
+    except Exception as e:
+        app.logger.error(f"Error in /api/calculate_raw_data_size: {str(e)}")
+        return jsonify({'error': str(e)}), 500
