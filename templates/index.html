@@ -40,16 +40,22 @@
         document.getElementById('decode-form').addEventListener('submit', async function(e) {
             e.preventDefault();
             const formData = new FormData(this);
-            const response = await fetch('/decode', {
-                method: 'POST',
-                body: formData
-            });
-            const result = await response.json();
             const resultDiv = document.getElementById('decode-result');
-            if (response.ok) {
-                resultDiv.innerHTML = `<div id="result"><h3>Decoded String:</h3><pre>${result.decoded_string}</pre></div>`;
-            } else {
-                resultDiv.innerHTML = `<div id="result"><h3>Error:</h3><p>${result.error}</p></div>`;
+            resultDiv.innerHTML = ''; // Clear previous results
+
+            try {
+                const response = await fetch('/decode', {
+                    method: 'POST',
+                    body: formData
+                });
+                const result = await response.json(); // Try to parse JSON regardless of response.ok
+                if (response.ok) {
+                    resultDiv.innerHTML = `<div id="result"><h3>Decoded String:</h3><pre>${result.decoded_string}</pre></div>`;
+                } else {
+                    resultDiv.innerHTML = `<div id="result"><h3>Error:</h3><p>${result.error || 'Unknown error'}</p></div>`;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `<div id="result"><h3>Error:</h3><p>${error.message || 'Failed to fetch or parse response.'}</p></div>`;
             }
         });
 
@@ -57,19 +63,25 @@
         document.getElementById('encode-form').addEventListener('submit', async function(e) {
             e.preventDefault();
             const formData = new FormData(this);
-            const response = await fetch('/encode', {
-                method: 'POST',
-                body: formData
-            });
-            if (response.ok) {
-                const blob = await response.blob();
-                const url = URL.createObjectURL(blob);
-                const resultDiv = document.getElementById('encode-result');
-                resultDiv.innerHTML = `<div id="result"><h3>Encoded QR Code:</h3><a href="${url}" download="encoded_qr.png">Download QR Code</a><br><img src="${url}" alt="Encoded QR Code"></div>`;
-            } else {
-                const result = await response.json();
-                const resultDiv = document.getElementById('encode-result');
-                resultDiv.innerHTML = `<div id="result"><h3>Error:</h3><p>${result.error}</p></div>`;
+            const resultDiv = document.getElementById('encode-result');
+            resultDiv.innerHTML = ''; // Clear previous results
+
+            try {
+                const response = await fetch('/encode', {
+                    method: 'POST',
+                    body: formData
+                });
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = URL.createObjectURL(blob);
+                    resultDiv.innerHTML = `<div id="result"><h3>Encoded QR Code:</h3><a href="${url}" download="encoded_qr.png">Download QR Code</a><br><img src="${url}" alt="Encoded QR Code"></div>`;
+                } else {
+                    // Try to parse JSON error response
+                    const result = await response.json();
+                    resultDiv.innerHTML = `<div id="result"><h3>Error:</h3><p>${result.error || 'Unknown error'}</p></div>`;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `<div id="result"><h3>Error:</h3><p>${error.message || 'Failed to fetch or parse response.'}</p></div>`;
             }
         });
     </script>
