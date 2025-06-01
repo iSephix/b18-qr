@@ -8,8 +8,8 @@ import math
 import re
 import cv2
 import base64
-import sympy
-from sympy import Eq, solve
+# import sympy # Sympy removed
+# from sympy import Eq, solve # Sympy removed
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
 import io
@@ -26,13 +26,9 @@ def encode_base18_rs(message_base18, n, k):
     k: message length.
     Returns: Encoded codeword as a GF(19) array.
     """
-    # Reed-Solomon codes are defined over a Galois Field (GF).
-    # GF(19) means the symbols are integers from 0 to 18.
     GF = galois.GF(19)
-    # n: total symbols in a codeword (message + parity).
-    # k: message symbols in a codeword.
     RS = galois.ReedSolomon(n, k, field=GF)
-    message = GF(message_base18)  # Convert message symbols to GF(19) elements
+    message = GF(message_base18)
     codeword = RS.encode(message)
     return codeword
 
@@ -43,19 +39,14 @@ def decode_base18_rs(received_codeword, n, k):
     received_codeword: list of integers in base-18 (0-17).
     Returns: Decoded message as a list of base-18 symbols.
     """
-    # GF(19) indicates symbols are 0-18.
     GF = galois.GF(19)
-    # n: total symbols in the received codeword.
-    # k: expected message symbols in the codeword.
     RS = galois.ReedSolomon(n, k, field=GF)
-    received = GF(received_codeword)  # Convert received symbols to GF(19) elements
+    received = GF(received_codeword)
     try:
-        # Attempt to decode the message. This can correct up to (n-k)/2 errors.
         message = RS.decode(received)
-        return message.tolist()  # Return as a list of integers
+        return message.tolist()
     except galois.ReedSolomonError as e:
-        # This error occurs if the codeword has too many errors to be corrected.
-        app.logger.error(f"Decoding failed: {e}")
+        app.logger.error(f"Decoding failed: {e}") # Changed print to app.logger.error
         return None
 
 # Function to generate the symbols list consistently
@@ -89,21 +80,7 @@ color_rgb_map = {
 
 def encode_string(input_string):
     """
-    Encodes a string into a list of symbol pairs for image generation.
-    The process involves:
-    1. Tokenizing the input string based on special tags (e.g., <linear>, <encrypt>).
-    2. Converting text segments and special tags into a sequence of bytes.
-       - Regular text is UTF-8 encoded.
-       - Special tags are mapped to predefined byte values.
-       - Content within <encrypt_method> and <encrypt_key> tags is stored directly.
-       - Content within <encrypt> tags is encrypted using AES.
-    3. Validating that all byte values are within the allowed range (0-323).
-    4. Mapping each byte to two base-18 symbols (indices 0-17).
-    5. Applying Reed-Solomon forward error correction to the symbol indices.
-       - Symbols are padded with '0' to form complete blocks of k symbols.
-       - Each block of k symbols is encoded into n symbols.
-    6. Converting the encoded symbol indices back to (color, shape) tuples.
-    7. Grouping symbols into pairs for image cell representation.
+    Encode a string into a list of symbol pairs and return the symbol pairs.
     """
     # Define the marker byte map
     marker_byte_map = {
@@ -167,7 +144,6 @@ def encode_string(input_string):
                 if index < len(tokens):
                     method_token = tokens[index]
                     stored_encrypt_method = method_token.strip()
-                    app.logger.info(f"Encoding <encrypt_method>: {stored_encrypt_method}")
                     # No need to encrypt method token
                     method_bytes = method_token.encode('utf-8')
                     byte_list.extend(method_bytes)
@@ -179,7 +155,6 @@ def encode_string(input_string):
                 if index < len(tokens):
                     key_token = tokens[index]
                     stored_encrypt_key = key_token.strip()
-                    app.logger.info(f"Encoding <encrypt_key>: {stored_encrypt_key[:2]}...{stored_encrypt_key[-2:]}") # Log partial key for security
                     # No need to encrypt key token
                     key_bytes = key_token.encode('utf-8')
                     byte_list.extend(key_bytes)
@@ -187,10 +162,8 @@ def encode_string(input_string):
                     end_marker_byte = marker_byte_map['</encrypt_key>']
                     byte_list.append(end_marker_byte)
             elif marker == '<encrypt>':
-                app.logger.info("Starting <encrypt> block")
                 is_encrypting = True
             elif marker == '</encrypt>':
-                app.logger.info("Ending </encrypt> block")
                 is_encrypting = False
 
         index += 1
@@ -202,36 +175,28 @@ def encode_string(input_string):
             raise ValueError("Byte value out of range (0-323)")
 
     # Map bytes to symbol indices
-    # Each byte (0-323) is mapped to two base-18 symbols (0-17).
     symbol_indices = []
     for byte in byte_list:
         symbol1_index = byte // 18
         symbol2_index = byte % 18
         symbol_indices.extend([symbol1_index, symbol2_index])
         # Debug statements
-        app.logger.info(f"Encoding byte {byte}: symbol1_index={symbol1_index}, symbol2_index={symbol2_index}")
+        app.logger.info(f"Encoding byte {byte}: symbol1_index={symbol1_index}, symbol2_index={symbol2_index}") # Changed print to app.logger.info
 
-    # --- Reed-Solomon Encoding ---
-    # ECC parameters for GF(19):
-    n = 18  # Codeword length (total symbols after encoding: message + parity)
-            # For GF(q), n must be <= q-1. Here, 18 <= 19-1.
-    k = 14  # Message length (number of data symbols per block)
-    # t = (n - k) // 2  # Error correction capability: (18-14)/2 = 2 symbols per block.
+    # ECC parameters
+    n = 18  # Codeword length (must divide q - 1, where q = 19)
+    k = 14  # Message length
+    t = (n - k) // 2  # Error correction capability
 
-    # Pad symbol_indices to be a multiple of k (message length for RS encoding).
-    # This ensures that the data can be broken into complete blocks of k symbols.
-    # Padding uses '0', which is a valid symbol in GF(19).
+    # Pad symbol_indices to a multiple of k
     if len(symbol_indices) % k != 0:
         padding_length = k - (len(symbol_indices) % k)
-        symbol_indices.extend([0]*padding_length)
-        app.logger.info(f"Padded symbol_indices with {padding_length} zeros for RS encoding.")
+        symbol_indices.extend([0]*padding_length)  # Padding with zeros (can be any value 0-17)
 
-    # Encode using Reed-Solomon in blocks.
-    # Each block of k message symbols is encoded into a codeword of n symbols.
+    # Encode using ECC
     codeword_indices = []
     for i in range(0, len(symbol_indices), k):
-        message_block = symbol_indices[i:i+k] # Get a block of k symbols
-        # Encode the block using RS(n,k) over GF(19)
+        message_block = symbol_indices[i:i+k]
         codeword_block = encode_base18_rs(message_block, n, k)
         codeword_indices.extend(codeword_block.tolist())
 
@@ -275,107 +240,62 @@ def create_image(symbol_pairs, output_image=None):
     Create an image from the list of symbol pairs, including markers.
     If output_image is None, return the image object instead of saving.
     """
-    # --- Grid Setup ---
-    # Define marker pattern (3x3) and its size.
+    # Define marker pattern
     marker_pattern = get_marker_pattern()
-    marker_size = len(marker_pattern)  # marker_size is 3 for a 3x3 pattern.
+    marker_size = len(marker_pattern)  # Assuming square marker
 
-    # Flatten the list of symbol pairs into a single list of symbols.
+    # Flatten the list of symbol pairs into a list of symbols
     symbols_flat = [symbol for pair in symbol_pairs for symbol in pair]
     num_data_symbols = len(symbols_flat)
 
-    # Calculate the minimal square grid size required for data symbols.
+    # Calculate the minimal data area size
     data_area_size = math.ceil(math.sqrt(num_data_symbols))
 
-    # Calculate total grid dimensions:
-    # Add marker_size for one side (e.g., top markers).
-    # Add 1 for spacing between the marker area and the data area.
-    # The data_area_size itself.
-    # Example: If data_area_size=10, marker_size=3, then grid_width = 10 (data) + 3 (marker) + 1 (space) = 14.
-    # This calculation seems to place markers only along two combined edges (e.g. top & left of data)
-    # or implies data area is distinct from marker columns/rows.
-    # Based on marker placement logic, markers are at 3 corners, so data fills around them.
-    # A more accurate way for grid_width/height calculation considering corner markers:
-    # The central data area is `data_area_size` x `data_area_size`.
-    # Markers are placed at corners. If we assume a simple bounding box approach:
-    # grid_width = data_area_size (for data) + marker_size (for one side of markers, e.g. left)
-    # Let's re-evaluate based on current marker placement.
-    # The current placement puts markers in TL, TR, BL corners.
-    # The data area is effectively between these.
-    # Grid width needs to accommodate data_area_size symbols plus width of markers on sides.
-    # If data_area_size is the side length of the square data region:
-    # Width: marker_size (left) + data_area_size + marker_size (right) - this is not how it's done.
-    # The current logic: `grid_width = data_area_size + marker_size + 1`
-    # This suggests `data_area_size` is the width of the data region,
-    # and markers are added along one side (e.g., left) and one row on top, plus a space.
-    # Let's trace the placement:
-    # Markers are at (0,0), (0, grid_width-marker_size), (grid_height-marker_size, 0).
-    # Data is placed by iterating i,j over grid_height, grid_width and skipping marker areas.
-    # So, data_area_size is the dimension of the main data block.
-    # The total grid size is `data_area_size` plus space for markers around it.
-    # A common pattern is: marker_size + data_area_size + marker_size.
-    # The current `grid_width = data_area_size + marker_size + 1` implies that
-    # one marker dimension and a space are added to the data area size.
-    # This seems to be an estimation for a layout where data is mostly contiguous.
-    # For a robust layout with corner markers, if `data_area_size` is the dimension of the data region,
-    # and markers (size `m`) are at corners, the total grid width might be closer to `m + data_area_size` if data slots into the space
-    # defined by markers, or `data_area_size` itself if it's an outer bound.
-    # Given the existing code, we assume `data_area_size` refers to the side length of the data symbol region,
-    # and `grid_width`/`grid_height` are calculated to fit this data plus the corner markers and some spacing.
-    # The `+1` likely ensures a separating row/column between data and markers or edge.
-
-    grid_width = data_area_size + marker_size + 1
+    # Adjust grid size to include markers
+    grid_width = data_area_size + marker_size + 1  # +1 for spacing between markers and data
     grid_height = data_area_size + marker_size + 1
-    app.logger.info(f"Calculated grid dimensions: {grid_width}x{grid_height} for {num_data_symbols} data symbols (data area: {data_area_size}x{data_area_size})")
 
-    # Initialize the grid with a special_symbol (e.g., gray square) for empty cells.
+    # Initialize the grid
     grid = [[special_symbol for _ in range(grid_width)] for _ in range(grid_height)]
 
-    # --- Place Corner Markers ---
-    # Markers are placed at Top-Left, Top-Right, and Bottom-Left corners.
-    # Top-left corner marker placement:
+    # Place markers at the corners
+    # Top-left corner
     for i in range(marker_size):
         for j in range(marker_size):
             grid[i][j] = marker_pattern[i][j]
-    # Top-right corner marker placement:
+    # Top-right corner
     for i in range(marker_size):
         for j in range(marker_size):
             grid[i][grid_width - marker_size + j] = marker_pattern[i][j]
-    # Bottom-left corner marker placement:
+    # Bottom-left corner
     for i in range(marker_size):
         for j in range(marker_size):
             grid[grid_height - marker_size + i][j] = marker_pattern[i][j]
 
-    # --- Place Data Symbols ---
-    # Data symbols are filled into the grid, row by row, skipping areas occupied by markers.
+    # Place data symbols into the grid
     data_index = 0
     for i in range(grid_height):
         for j in range(grid_width):
-            # Check if the current cell (i, j) is part of any marker area.
-            is_top_left_marker = (i < marker_size and j < marker_size)
-            is_top_right_marker = (i < marker_size and j >= grid_width - marker_size)
-            is_bottom_left_marker = (i >= grid_height - marker_size and j < marker_size)
-
-            in_marker_area = is_top_left_marker or is_top_right_marker or is_bottom_left_marker
-
+            # Skip marker areas
+            in_marker_area = (
+                (i < marker_size and j < marker_size) or  # Top-left
+                (i < marker_size and j >= grid_width - marker_size) or  # Top-right
+                (i >= grid_height - marker_size and j < marker_size)  # Bottom-left
+            )
             if in_marker_area:
-                continue  # Skip if it's a marker cell.
-
-            # If not a marker cell, place a data symbol if available.
+                continue
             if data_index < num_data_symbols:
                 grid[i][j] = symbols_flat[data_index]
                 data_index += 1
             else:
-                # If all data symbols are placed, fill remaining cells with the special_symbol.
+                # Fill remaining with special symbol
                 grid[i][j] = special_symbol
 
-    # --- Image Rendering ---
-    # Calculate final image dimensions based on grid size, cell size, and margin size.
-    # Total width = (number of cells horizontally * cell width) + (number of margins horizontally * margin width)
+    # Now, create the image from the grid
     img_width = grid_width * CELL_SIZE + (grid_width + 1) * MARGIN_SIZE
     img_height = grid_height * CELL_SIZE + (grid_height + 1) * MARGIN_SIZE
 
-    # Create an RGB image with the specified background color.
+    # Create an RGB image with our background color
     image = Image.new('RGB', (img_width, img_height), color=color_rgb_map['background'])
     draw = ImageDraw.Draw(image)
 
@@ -406,7 +326,7 @@ def create_image(symbol_pairs, output_image=None):
         # If output_image is a string, save to file
         if isinstance(output_image, str):
             image.save(output_image)
-            app.logger.info(f"Image saved as {output_image}")
+            app.logger.info(f"Image saved as {output_image}") # Changed print to app.logger.info
         else:
             # Assume output_image is a BytesIO object
             image.save(output_image, format='PNG')
@@ -422,7 +342,7 @@ def encrypt_data(data, key):
     key_padded = pad(key_bytes, 16)[:16]
     cipher = AES.new(key_padded, AES.MODE_ECB)
     ciphertext = cipher.encrypt(pad(data, 16))
-    app.logger.info(f"CYPHER: {list(ciphertext)}")
+    app.logger.info(f"CYPHER: {list(ciphertext)}") # Changed print to app.logger.info
     return list(ciphertext)
 
 def decrypt_data(ciphertext, key):
@@ -436,55 +356,56 @@ def decrypt_data(ciphertext, key):
     decrypted_data = unpad(cipher.decrypt(bytes(ciphertext)), 16)
     return decrypted_data
 
-def process_linear_function(equation_str):
-    """
-    Solve a linear equation provided as a string.
-    """
-    x = sympy.symbols('x')
-    # Remove spaces
-    equation_str = equation_str.replace(' ', '')
-    try:
-        # Split the equation into left and right parts
-        lhs_str, rhs_str = equation_str.split('=')
-        lhs = sympy.sympify(lhs_str)
-        rhs = sympy.sympify(rhs_str)
-        equation = sympy.Eq(lhs, rhs)
-        # Solve the equation
-        solution = sympy.solve(equation, x)
-        return solution
-    except Exception as e:
-        app.logger.error(f"Error solving linear equation: {e}")
-        return []
+# def process_linear_function(equation_str): # Removed - Sympy dependency
+#     """
+#     Solve a linear equation provided as a string.
+#     """
+#     # x = sympy.symbols('x')
+#     # # Remove spaces
+#     # equation_str = equation_str.replace(' ', '')
+#     # try:
+#     #     # Split the equation into left and right parts
+#     #     lhs_str, rhs_str = equation_str.split('=')
+#     #     lhs = sympy.sympify(lhs_str)
+#     #     rhs = sympy.sympify(rhs_str)
+#     #     equation = sympy.Eq(lhs, rhs)
+#     #     # Solve the equation
+#     #     solution = sympy.solve(equation, x)
+#     #     return solution
+#     # except Exception as e:
+#     #     app.logger.error(f"Error solving linear equation: {e}")
+#     #     return []
+#     pass
 
-def process_power_function(content_str):
-    """
-    Solve a power equation provided as a string.
-    """
-    x = sympy.symbols('x')
-    # Replace '^' with '**'
-    content_str = content_str.replace('^', '**')
-    # Remove spaces
-    content_str = content_str.replace(' ', '')
-    try:
-        # Split the equation into left and right parts
-        lhs_str, rhs_str = content_str.split('=')
-        lhs = sympy.sympify(lhs_str)
-        rhs = sympy.sympify(rhs_str)
-        equation = sympy.Eq(lhs, rhs)
-        # Solve the equation
-        solution = sympy.solve(equation, x)
-        return solution
-    except Exception as e:
-        app.logger.error(f"Error solving power function: {e}")
-        return []
+
+# def process_power_function(content_str): # Removed - Sympy dependency
+#     """
+#     Solve a power equation provided as a string.
+#     """
+#     # x = sympy.symbols('x')
+#     # # Replace '^' with '**'
+#     # content_str = content_str.replace('^', '**')
+#     # # Remove spaces
+#     # content_str = content_str.replace(' ', '')
+#     # try:
+#     #     # Split the equation into left and right parts
+#     #     lhs_str, rhs_str = content_str.split('=')
+#     #     lhs = sympy.sympify(lhs_str)
+#     #     rhs = sympy.sympify(rhs_str)
+#     #     equation = sympy.Eq(lhs, rhs)
+#     #     # Solve the equation
+#     #     solution = sympy.solve(equation, x)
+#     #     return solution
+#     # except Exception as e:
+#     #     app.logger.error(f"Error solving power function: {e}")
+#     #     return []
+#     pass
 
 def process_base64_data(content_str):
     """
     Decode base64 data and save it as an image.
     """
     try:
-        # The decoded_data is the actual image bytes.
-        # In a typical application, you might save this, return it, or process it further.
         decoded_data = base64.b64decode(content_str)
         # In a serverless environment like Vercel, writing to the local filesystem is ephemeral
         # and generally not recommended for persistent storage or user-facing file delivery.
@@ -492,7 +413,7 @@ def process_base64_data(content_str):
         # returned as a response from a dedicated endpoint, e.g., with a Content-Type of image/png.
         app.logger.info("Base64 data was processed. In a serverless environment, it is not saved to a file.")
     except Exception as e:
-        app.logger.error(f"Error decoding base64 data: {e}")
+        app.logger.error(f"Error decoding base64 data: {e}") # Changed print to app.logger.error
 
 def identify_symbol(cell_image):
     """
@@ -503,35 +424,25 @@ def identify_symbol(cell_image):
     cell_image = cell_image.convert('RGB')
     np_image = np.array(cell_image)
 
-    # --- Background Subtraction ---
-    # Identify non-background pixels to isolate the symbol.
-    # The background color is defined in `color_rgb_map`.
+    # Get the background color
     background_color = np.array(color_rgb_map['background'], dtype=np.uint8)
 
-    # `tolerance`: A pixel channel's value must differ from the background's
-    # corresponding channel by more than this tolerance to be considered part of the symbol.
-    # This helps ignore minor artifacts or slight color variations in the background.
-    tolerance = 60
-    # Calculate the absolute difference between the image and the background color.
-    # If any color channel (R, G, or B) difference exceeds the tolerance, mark it as non-background.
+    # Allow a small tolerance when comparing background color
+    tolerance = 60  # Adjust this value as needed
     diff = np.abs(np_image.astype(int) - background_color.astype(int))
     non_background_pixels = np.any(diff > tolerance, axis=-1).astype(np.uint8) * 255
 
-    # If no non-background pixels are found (e.g., an empty or pure background cell),
-    # then no symbol can be identified.
+    # If no non-background pixels are found, return None
     if not np.any(non_background_pixels):
         return None
 
-    # --- Color Identification ---
-    # Get the RGB values of all identified non-background (symbol) pixels.
+    # Get the RGB values of non-background pixels
     colors_in_image = np_image[non_background_pixels == 255]
 
-    # Compute the average color of these symbol pixels. This average RGB value
-    # represents the dominant color of the symbol.
+    # Compute the average color of the symbol
     avg_color = np.mean(colors_in_image, axis=0)
 
-    # Find the closest predefined color from `color_rgb_map` using Euclidean distance
-    # in the RGB color space. This determines the symbol's color.
+    # Find the closest predefined color using Euclidean distance
     min_distance = float('inf')
     detected_color = None
     for color_name, rgb in color_rgb_map.items():
@@ -543,75 +454,44 @@ def identify_symbol(cell_image):
             detected_color = color_name
 
     if detected_color == 'gray':
-        # If the detected color is 'gray', it's treated as a special symbol
-        # used for padding or undefined areas, as defined by `special_symbol`.
+        # Special symbol
         return special_symbol
 
-    # --- Shape Identification using OpenCV Contours ---
-    # Convert the non-background pixels (symbol) into a binary image (black and white)
-    # for contour detection.
+    # Now, determine the shape using OpenCV contours
+    # Convert non-background pixels to binary image
     binary_image = non_background_pixels
 
-    # Find contours in the binary image.
-    # `cv2.RETR_EXTERNAL`: Retrieves only the extreme outer contours.
-    # `cv2.CHAIN_APPROX_SIMPLE`: Compresses horizontal, vertical, and diagonal segments
-    #                            and leaves only their end points.
+    # Find contours
     contours, _ = cv2.findContours(binary_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     if not contours:
-        # If no contours are found, the shape cannot be determined.
         return None
 
-    # Assume the largest contour found corresponds to the symbol's shape.
+    # Use the largest contour
     contour = max(contours, key=cv2.contourArea)
 
-    # Approximate the contour to a simpler polygon.
-    # `epsilon`: Maximum distance between the original contour and its approximation.
-    #            It's calculated as a percentage (4% in this case) of the contour's arc length.
-    #            A smaller epsilon means a closer approximation; a larger epsilon means more simplification.
+    # Approximate the contour
     epsilon = 0.04 * cv2.arcLength(contour, True)
     approx = cv2.approxPolyDP(contour, epsilon, True)
 
-    # The number of vertices in the approximated polygon helps identify the shape.
     num_vertices = len(approx)
 
-    # Shape identification based on the number of vertices:
-    # 3 vertices: Triangle
-    # 4 vertices: Square (or rectangle, but symbols are designed as squares)
-    # Others:     Circle (approximated by a polygon with more vertices)
+    # Shape identification based on number of vertices
     if num_vertices == 3:
         detected_shape = 'triangle'
     elif num_vertices == 4:
         detected_shape = 'square'
     else:
-        # Includes shapes that are more complex or round, approximated as circles.
         detected_shape = 'circle'
 
-    # Log the identified symbol's color and shape.
-    app.logger.info(f"Identified symbol: Color={detected_color}, Shape={detected_shape}")
+    # Debug statement
+    app.logger.info(f"Identified symbol: Color={detected_color}, Shape={detected_shape}") # Changed print to app.logger.info
 
     return (detected_color, detected_shape)
 
 def decode_image_pil(image):
     """
-    Decodes a PIL Image containing the symbol grid back into the original string.
-    The process involves:
-    1. Defining grid parameters based on image size, cell size, and margins.
-    2. Verifying the presence and correctness of corner markers. If markers are incorrect, decoding fails.
-    3. Reading symbols from the grid:
-       - Each cell in the image is cropped.
-       - `identify_symbol()` is called to determine the (color, shape) of the symbol in the cell.
-       - Areas occupied by markers are skipped. Unidentifiable symbols are replaced by `special_symbol`.
-    4. Mapping the identified (color, shape) symbols to their corresponding numerical indices (0-18).
-    5. Applying Reed-Solomon error correction decoding:
-       - Symbol indices are processed in blocks of n symbols.
-       - Incomplete blocks are padded with the `special_symbol` index (18).
-       - Each block is decoded from n symbols to k symbols. Failed decodes are logged, and the process continues (partial recovery).
-    6. Converting the decoded symbol indices back into bytes (each pair of symbols forms one byte).
-    7. Reconstructing the original string from the byte list:
-       - This involves parsing special marker bytes (e.g., for <linear>, <encrypt>) and handling their content.
-       - Encrypted content is decrypted using AES.
-       - Content for tags like <linear>, <power>, <base64> is processed by respective helper functions.
+    Decode a PIL Image back into the original string using ECC.
     """
     # Define the marker pattern
     marker_pattern = get_marker_pattern()
@@ -647,7 +527,7 @@ def decode_image_pil(image):
                     marker_verified = False
                     break
             if not marker_verified:
-                app.logger.error(f"Marker verification failed at position ({row_offset}, {col_offset})")
+                app.logger.error(f"Marker verification failed at position ({row_offset}, {col_offset})") # Changed print to app.logger.error
                 return None  # Or handle accordingly
 
     # Read the grid symbols
@@ -685,35 +565,24 @@ def decode_image_pil(image):
             # Symbol not found, skip
             continue
 
-    # --- Reed-Solomon Decoding ---
-    # ECC parameters used during encoding (must match):
-    n = 18  # Codeword length (total symbols in each block that was encoded)
-    k = 14  # Message length (number of data symbols expected after decoding each block)
+    # ECC parameters
+    n = 18  # Codeword length (must match encoding)
+    k = 14  # Message length
 
-    # Process symbol_indices (read from image) in blocks of length n for RS decoding.
+    # Process symbol_indices in blocks of length n
     decoded_message_symbols = []
     for i in range(0, len(symbol_indices), n):
-        codeword_block = symbol_indices[i:i+n] # Get a block of n symbols
-
-        # If the last block is shorter than n, pad it.
-        # Padding uses the index of `special_symbol` (18), which is a valid element in GF(19).
-        # This is important because RS decoding expects blocks of fixed length n.
+        codeword_block = symbol_indices[i:i+n]
         if len(codeword_block) < n:
-            padding_needed = n - len(codeword_block)
-            codeword_block.extend([symbols_list_extended.index(special_symbol)] * padding_needed)
-            app.logger.info(f"Padded last RS codeword block with {padding_needed} special_symbol indices.")
-
-        # Attempt to decode the block using RS(n,k) over GF(19).
+            # Incomplete block, pad with special_symbol index
+            codeword_block.extend([symbols_list_extended.index(special_symbol)] * (n - len(codeword_block)))
+        # Apply ECC decoding
         message_block = decode_base18_rs(codeword_block, n, k)
         if message_block is not None:
-            # If decoding is successful, add the k message symbols to the list.
             decoded_message_symbols.extend(message_block)
         else:
-            # If decoding fails for a block (too many errors), log a warning and continue.
-            # This allows for partial data recovery if other blocks are decodable.
-            app.logger.warning(f"RS decoding failed for block starting at image symbol index {i}")
-            # Note: Depending on requirements, one might choose to halt on first error,
-            # or collect information about failed blocks. Here, we attempt to recover as much as possible.
+            # Decoding failed, skip this block or handle accordingly
+            app.logger.warning(f"RS decoding failed for block starting at index {i}") # Changed print to app.logger.warning
             continue
 
     # Convert message symbols back into bytes
@@ -731,7 +600,7 @@ def decode_image_pil(image):
             byte_list.append(byte_value)
         else:
             # Invalid byte value, skip
-            app.logger.warning(f"Invalid byte value {byte_value} from symbols at indices {i}, {i+1}")
+            app.logger.warning(f"Invalid byte value {byte_value} from symbols at indices {i}, {i+1}") # Changed print to app.logger.warning
         i += 2
 
     # Define reverse marker byte map
@@ -783,7 +652,6 @@ def decode_image_pil(image):
         if byte_value in marker_names:
             # Start marker
             marker_name = marker_names[byte_value]
-            app.logger.info(f"Found start marker for <{marker_name}>")
             if marker_name == 'encrypt_method':
                 # Collect the method name until end marker
                 method_bytes = []
@@ -792,7 +660,6 @@ def decode_image_pil(image):
                     method_bytes.append(byte_list[i])
                     i += 1
                 stored_encrypt_method = bytes(method_bytes).decode('utf-8', errors='replace').strip()
-                app.logger.info(f"Decoded <encrypt_method>: {stored_encrypt_method}")
             elif marker_name == 'encrypt_key':
                 # Collect the key until end marker
                 key_bytes = []
@@ -801,58 +668,42 @@ def decode_image_pil(image):
                     key_bytes.append(byte_list[i])
                     i += 1
                 stored_encrypt_key = bytes(key_bytes).decode('utf-8', errors='replace').strip()
-                app.logger.info(f"Decoded <encrypt_key>: {stored_encrypt_key[:2]}...{stored_encrypt_key[-2:]}")
             elif marker_name == 'encrypt':
                 is_encrypting = True
                 content_buffer = []
-            else: # 'linear', 'power', 'base64'
+            else:
                 current_marker = marker_name
                 content_buffer = []
         elif byte_value in marker_pairs.values():
             # End marker
-            end_marker_tag = reverse_marker_byte_map[byte_value]
-            app.logger.info(f"Found end marker {end_marker_tag}")
             if is_encrypting and byte_value == marker_byte_map['</encrypt>']:
                 if stored_encrypt_method == 'AES' and stored_encrypt_key is not None:
-                    try:
-                        decrypted_data_bytes = decrypt_data(content_buffer, stored_encrypt_key)
-                        output_string += decrypted_data_bytes.decode('utf-8', errors='replace')
-                        app.logger.info("Successfully decrypted and decoded AES content.")
-                    except (ValueError, UnicodeDecodeError) as e:
-                        app.logger.error(f"Decryption/Decode error for encrypted content: {e}")
-                        output_string += "[Decryption Error: unable to process content]"
+                    decrypted_data = decrypt_data(content_buffer, stored_encrypt_key)
+                    output_string += decrypted_data.decode('utf-8', errors='replace')
                 else:
-                    app.logger.error("Encryption method/key not specified for <encrypt> block.")
-                    # This case will also be caught by the route's general exception handler if not handled here.
-                    # For consistency, appending an error message to output_string might be better than raising an error mid-decode.
-                    output_string += "[Encryption Error: method or key not specified]"
-                    # raise ValueError("Encryption method or key not specified properly.") # Original behavior
+                    raise ValueError("Encryption method or key not specified properly.")
                 is_encrypting = False
                 content_buffer = []
-            elif current_marker is not None and byte_value == marker_pairs.get(marker_byte_map.get(f'<{current_marker}>')):
-                app.logger.info(f"Processing content for <{current_marker}>")
+            elif current_marker is not None:
                 # Process the content buffer
                 content_bytes = bytes(content_buffer)
-                if current_marker == 'linear':
-                    # Process linear function
-                    content_str = content_bytes.decode('utf-8', errors='replace')
-                    solution = process_linear_function(content_str)
-                    output_string += f"Linear Function Solution: {solution}\n"
-                elif current_marker == 'power':
-                    # Process power function
-                    content_str = content_bytes.decode('utf-8', errors='replace')
-                    solution = process_power_function(content_str)
-                    output_string += f"Power Function Solution: {solution}\n"
+                content_str = content_bytes.decode('utf-8', errors='replace')
+
+                original_tag_name = current_marker # 'linear', 'power', or 'base64'
+                start_marker_str = f"<{original_tag_name}>"
+                end_marker_str = f"</{original_tag_name}>"
+
+                if current_marker == 'linear' or current_marker == 'power':
+                    # Append the original tag and its content, for client-side processing by math.js
+                    output_string += start_marker_str + content_str + end_marker_str
+                    app.logger.info(f"Passing <{current_marker}> tag to client: {start_marker_str}{content_str}{end_marker_str}")
                 elif current_marker == 'base64':
-                    # Process base64 data
-                    content_str = content_bytes.decode('utf-8', errors='replace')
-                    process_base64_data(content_str) # This logs internally
-                    output_string += f"[Base64 data processed]\n"
-                # Reset current_marker
+                    process_base64_data(content_str) # This logs internally for Vercel
+                    # Append the original tag and content, plus a server-side processing note
+                    output_string += f"{start_marker_str}{content_str}{end_marker_str}[Base64 data processed by server and not displayed here]"
+
                 current_marker = None
                 content_buffer = []
-            # Consider what happens if an end marker is found that doesn't match current_marker (e.g. </linear> inside <power>)
-            # Current logic: it would be treated as a normal byte if not the expected end marker. This is acceptable.
         elif is_encrypting:
             # Collect encrypted content bytes
             content_buffer.append(byte_value)
@@ -916,72 +767,3 @@ def encode_route():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
-
-@app.route('/api/calculate_raw_data_size', methods=['POST'])
-def calculate_raw_data_size_route():
-    try:
-        payload = request.get_json()
-        if not payload or 'data_string' not in payload:
-            return jsonify({'error': 'Missing data_string in request payload'}), 400
-
-        data_string = payload['data_string']
-
-        # Replicate relevant parts of encode_string's byte list generation
-        marker_byte_map = {
-            '<linear>': 257, '</linear>': 258, '<power>': 259, '</power>': 260,
-            '<base64>': 281, '</base64>': 282, '<encrypt_method>': 285, '</encrypt_method>': 286,
-            '<encrypt_key>': 287, '</encrypt_key>': 288, '<encrypt>': 289, '</encrypt>': 290,
-        }
-        marker_pattern = re.compile('|'.join(re.escape(k) for k in marker_byte_map.keys()))
-        byte_list = []
-        tokens = marker_pattern.split(data_string)
-        markers = marker_pattern.findall(data_string)
-
-        is_encrypting_content = False # Simplified flag for content within <encrypt>...</encrypt>
-
-        index = 0
-        while index < len(tokens):
-            token = tokens[index]
-
-            if is_encrypting_content:
-                # For size calculation, add byte length of raw token content
-                # This doesn't account for AES padding, but gives a raw estimate
-                byte_list.extend(list(token.encode('utf-8')))
-                is_encrypting_content = False # Reset after processing the content
-            else:
-                # Add UTF-8 bytes of normal text
-                byte_list.extend(list(token.encode('utf-8')))
-
-            if index < len(markers):
-                marker = markers[index]
-                marker_byte = marker_byte_map[marker]
-                byte_list.append(marker_byte)
-
-                if marker == '<encrypt_method>':
-                    index += 1
-                    if index < len(tokens): # Content for method
-                        method_token = tokens[index]
-                        byte_list.extend(list(method_token.encode('utf-8')))
-                elif marker == '<encrypt_key>':
-                    index += 1
-                    if index < len(tokens): # Content for key
-                        key_token = tokens[index]
-                        byte_list.extend(list(key_token.encode('utf-8')))
-                elif marker == '<encrypt>':
-                    is_encrypting_content = True # Next token is the content to be "encrypted"
-                # No need to explicitly handle </encrypt> for is_encrypting_content reset,
-                # as it's reset after the content token is processed.
-                # Other end markers like </linear> etc. are just added as bytes.
-            index += 1
-
-        # Optional: Validate byte values if strict adherence to 0-323 is needed for size calc
-        # For now, raw byte count is likely sufficient for an estimate.
-        # for byte_val in byte_list:
-        #     if not (0 <= byte_val <= 323): # Check if any are outside this range if they are special marker values
-        #         pass # Or handle as an error if markers are expected to be within this for some reason
-
-        return jsonify({'raw_data_size': len(byte_list)})
-
-    except Exception as e:
-        app.logger.error(f"Error in /api/calculate_raw_data_size: {str(e)}")
-        return jsonify({'error': str(e)}), 500
