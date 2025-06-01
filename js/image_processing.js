@@ -117,6 +117,13 @@ async function decodeVisualCodeFromImage(imageElement) {
     const final_jsfeat_markers = nonMaxSuppression_jsfeat(verified_markers_raw, 0.3);
     console.timeEnd("nonMaxSuppression_jsfeat");
     console.info(`Found ${final_jsfeat_markers.length} markers after NMS.`);
+
+    if (!final_jsfeat_markers || final_jsfeat_markers.length < 3) {
+        console.warn('JSFeat Path: Not enough final markers found after NMS. Need at least 3.');
+        updateDecodeResultUI('Error: Could not find enough distinct markers (JSFeat). Try adjusting image or lighting.');
+        // selectCornerMarkers_jsfeat will handle < 3 markers, so we can let it proceed
+        // and it will return null, which is handled below.
+    }
     // final_jsfeat_markers.forEach(marker => { // Verbose
     //     console.log(`  Final JSFeat Marker: x=${marker.x}, y=${marker.y}, w=${marker.width}, h=${marker.height}, area=${marker.area}`);
     // });
@@ -160,23 +167,36 @@ async function decodeVisualCodeFromImage(imageElement) {
 
             console.info('Global perspective transform with JSFeat complete. Warped image dimensions:', warped_img_jsfeat.cols, 'x', warped_img_jsfeat.rows);
             // TODO: Next step is to use warped_img_jsfeat for grid symbol identification
+
+            if (!warped_img_jsfeat || warped_img_jsfeat.rows === 0 || warped_img_jsfeat.cols === 0) {
+                console.error('JSFeat Path: Warped image is empty or invalid after perspective transform.');
+                updateDecodeResultUI('Error: Failed to create a usable rectified image (JSFeat).');
+                hideSpinnerUI('decode-spinner');
+                return null;
+            }
         } else {
-            console.error("JSFeat corner selection failed to return all three distinct corner points.");
-             // updateDecodeResultUI("Decoding failed: JSFeat could not determine code corners."); // Temporarily commented
-            return null; // Abort if corners aren't good.
+            // This path is taken if selected_jsfeat_code_corners.TL_c, TR_c, or BL_c was falsy,
+            // which shouldn't happen if selectCornerMarkers_jsfeat returns a valid object.
+            // The main null check for selected_jsfeat_code_corners handles the primary failure.
+            console.error("JSFeat corner selection failed to return all three distinct corner points within the if-block.");
+            updateDecodeResultUI('Error: Critical failure in corner marker processing (JSFeat).');
+            hideSpinnerUI('decode-spinner');
+            return null;
         }
     } else {
-        console.error("JSFeat marker corner selection failed.");
-        // updateDecodeResultUI("Decoding failed: JSFeat marker corner selection failed."); // Temporarily commented
-        return null; // Abort if corners not selected
+        console.error("JSFeat marker corner selection failed (selectCornerMarkers_jsfeat returned null).");
+        updateDecodeResultUI('Error: Could not determine corner markers from found patterns (JSFeat).');
+        hideSpinnerUI('decode-spinner');
+        return null;
     }
     // --- End JSFeat Global Perspective Transform ---
 
-    let decodedString = null; // Declare decodedString here to be accessible by both paths
+    let decodedString = null;
 
     // If JSFeat path produced a warped image, proceed with JSFeat symbol identification
-    if (warped_img_jsfeat) {
+    if (warped_img_jsfeat) { // This check is now more robust due to the check above
         console.info("Attempting to decode symbols from JSFeat warped image...");
+        showSpinnerUI('decode-spinner'); // Show spinner before this potentially long operation
 
         for (const gridDim of POSSIBLE_GRID_DIMS) {
             console.info(`JSFeat Path: Attempting decode with grid dimension: ${gridDim}x${gridDim}`);
