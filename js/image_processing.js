@@ -23,68 +23,7 @@ const WARPED_IMAGE_SIZE = 300;
 const POSSIBLE_GRID_DIMS = [21, 25, 29, 17, 33];
 const MAX_ACCEPTABLE_COLOR_DISTANCE = 150;
 
-/**
- * Identifies the visual symbol (color and shape) within a given cell matrix.
- * @param {cv.Mat} cellMat_rgba - The OpenCV Mat for a single cell, in RGBA format.
- * @returns {Array<String>} An array containing [colorName, shapeName], e.g., ['blue', 'circle'], or specialSymbolJs on failure.
- */
-function identifySymbolJs(cellMat_rgba) {
-    if (cellMat_rgba.empty() || cellMat_rgba.cols < 3 || cellMat_rgba.rows < 3) return specialSymbolJs;
-    let detectedColorName = 'gray'; let detectedShape = 'square';
-    let grayCell = null, binaryCellForShape = null, contours = null, hierarchy = null, approxContour = null, largestContour = null; // Ensure proper scope for finally
-    try {
-        const rows = cellMat_rgba.rows; const cols = cellMat_rgba.cols; const channels = cellMat_rgba.channels();
-        const symbolPixelsR = []; const symbolPixelsG = []; const symbolPixelsB = [];
-        const bgColor = colorRgbMapJs.background; const colorTolerance = 60;
-        for (let y = 0; y < rows; y++) { for (let x = 0; x < cols; x++) {
-            const r = cellMat_rgba.data[y * cellMat_rgba.step + x * channels + 0];
-            const g = cellMat_rgba.data[y * cellMat_rgba.step + x * channels + 1];
-            const b = cellMat_rgba.data[y * cellMat_rgba.step + x * channels + 2];
-            const isBg = Math.abs(r - bgColor.r) <= colorTolerance && Math.abs(g - bgColor.g) <= colorTolerance && Math.abs(b - bgColor.b) <= colorTolerance;
-            if (!isBg) { symbolPixelsR.push(r); symbolPixelsG.push(g); symbolPixelsB.push(b); } } }
-        if (symbolPixelsR.length < (rows * cols * 0.1)) return specialSymbolJs;
-        symbolPixelsR.sort((a, b) => a - b); symbolPixelsG.sort((a, b) => a - b); symbolPixelsB.sort((a, b) => a - b);
-        const medianR = symbolPixelsR[Math.floor(symbolPixelsR.length / 2)];
-        const medianG = symbolPixelsG[Math.floor(symbolPixelsG.length / 2)];
-        const medianB = symbolPixelsB[Math.floor(symbolPixelsB.length / 2)];
-        let minDistance = Infinity;
-        for (const colorName in colorRgbMapJs) { if (colorName === 'background') continue;
-            const mapColor = colorRgbMapJs[colorName];
-            const distance = Math.sqrt(Math.pow(medianR - mapColor.r, 2) + Math.pow(medianG - mapColor.g, 2) + Math.pow(medianB - mapColor.b, 2));
-            if (distance < minDistance) { minDistance = distance; detectedColorName = colorName; } }
-        if (minDistance > MAX_ACCEPTABLE_COLOR_DISTANCE && detectedColorName !== 'gray') return specialSymbolJs;
-        if (detectedColorName === 'gray') return specialSymbolJs;
-        grayCell = new cv.Mat(); cv.cvtColor(cellMat_rgba, grayCell, cv.COLOR_RGBA2GRAY);
-        binaryCellForShape = new cv.Mat(); cv.threshold(grayCell, binaryCellForShape, 0, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
-        if (cv.mean(binaryCellForShape)[0] > 128) { cv.bitwise_not(binaryCellForShape, binaryCellForShape); }
-        contours = new cv.MatVector(); hierarchy = new cv.Mat();
-        cv.findContours(binaryCellForShape, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-        if (contours.size() === 0) { return [detectedColorName, 'square'];}
-        largestContour = contours.get(0); let maxArea = cv.contourArea(largestContour);
-        for (let i = 1; i < contours.size(); i++) { const c = contours.get(i); const area = cv.contourArea(c);
-            if (area > maxArea) { if(largestContour && !largestContour.isDeleted()) largestContour.delete(); largestContour = c.clone(); maxArea = area; }
-            if(c && !c.isDeleted()) c.delete();
-        }
-        if (maxArea < (cellMat_rgba.rows * cellMat_rgba.cols * 0.05)) { if(largestContour && !largestContour.isDeleted()) largestContour.delete(); return [detectedColorName, 'square'];}
-        approxContour = new cv.Mat(); const epsilon = 0.035 * cv.arcLength(largestContour, true);
-        cv.approxPolyDP(largestContour, approxContour, epsilon, true);
-        const numVertices = approxContour.rows;
-        if (numVertices === 3) detectedShape = 'triangle';
-        else if (numVertices === 4) detectedShape = 'square';
-        else if (numVertices > 4 && numVertices <= 8) detectedShape = 'circle';
-        else detectedShape = 'square';
-        if(largestContour && !largestContour.isDeleted()) largestContour.delete();
-    } catch (e) { console.error("identifySymbolJs error:", e.stack); return [detectedColorName, 'square']; }
-    finally {
-        if (grayCell && !grayCell.isDeleted()) grayCell.delete();
-        if (binaryCellForShape && !binaryCellForShape.isDeleted()) binaryCellForShape.delete();
-        if (contours && !contours.isDeleted()) contours.delete();
-        if (hierarchy && !hierarchy.isDeleted()) hierarchy.delete();
-        if (approxContour && !approxContour.isDeleted()) approxContour.delete();
-        if (largestContour && !largestContour.isDeleted()) largestContour.delete(); // Ensure cloned largestContour is deleted
-    }
-    return [detectedColorName, detectedShape];
-}
+// OpenCV-dependent identifySymbolJs function has been removed.
 
 /**
  * Main function to decode a visual code from an image element.
@@ -94,46 +33,153 @@ function identifySymbolJs(cellMat_rgba) {
  * @returns {Promise<String|null>} A promise that resolves to the decoded string, or null if decoding fails.
  */
 async function decodeVisualCodeFromImage(imageElement) {
-    if (!cv || !cv.imread) {
-        console.error('OpenCV.js is not loaded yet.');
-        updateDecodeResultUI('Error: OpenCV.js is not ready. Please try again in a moment.');
+    console.info('Starting JSFeat image processing pipeline...');
+    // updateDecodeResultUI('Processing image with JSFeat...'); // Intentionally commented, UI updates handled by caller or later
+    // updateDecodeResultUI('Processing image with JSFeat...'); // Temporarily commented
+
+    const width = imageElement.naturalWidth;
+    const height = imageElement.naturalHeight;
+
+    if (width === 0 || height === 0) {
+        console.error('Image has zero width or height.');
+        // updateDecodeResultUI('Error: Image has zero dimensions.'); // Temporarily commented
         return null;
     }
-    console.info('Starting visual code decoding...');
-    updateDecodeResultUI('Processing image...');
-    showSpinnerUI('decode-spinner');
 
-    let src = null, gray = null, binary = null, warpedImg = null;
-    let decodedString = null;
-
+    // Create a temporary canvas to get ImageData
+    let tempCanvas = document.createElement('canvas');
+    tempCanvas.width = width;
+    tempCanvas.height = height;
+    let ctx = tempCanvas.getContext('2d');
+    ctx.drawImage(imageElement, 0, 0, width, height);
+    let imageData = null;
     try {
-        src = cv.imread(imageElement);
-        gray = new cv.Mat(); cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
-        binary = new cv.Mat(); cv.adaptiveThreshold(gray, binary, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 11, 2);
+        imageData = ctx.getImageData(0, 0, width, height);
+    } catch (e) {
+        console.error('Error getting ImageData (possibly tainted canvas):', e);
+        // updateDecodeResultUI('Error: Could not get image data. If loading a remote image, ensure it has CORS headers.'); // Temporarily commented
+        return null;
+    }
 
-        const markerObjects = findMarkers_JS(binary, markerPatternJsDefinition);
-        if (!markerObjects || markerObjects.length < 3) {
-            updateDecodeResultUI(`Decoding failed: Could not find enough markers. Found ${markerObjects ? markerObjects.length : 0}. Need 3.`);
-            return null;
-        }
+    // Initialize JSFeat matrices
+    // jsfeat.matrix_t constructor: (columns, rows, data_type, data_buffer = undefined)
+    let gray_img = new jsfeat.matrix_t(width, height, jsfeat.U8_t | jsfeat.C1_t);
+    let img_u8_smooth = new jsfeat.matrix_t(width, height, jsfeat.U8_t | jsfeat.C1_t);
 
-        const cornerMarkerPoints = selectCornerMarkers_JS(markerObjects, src.cols, src.rows);
-        if (!cornerMarkerPoints) {
-           updateDecodeResultUI('Decoding failed: Could not select corner markers.');
-           return null;
-        }
+    // Convert to grayscale
+    // jsfeat.imgproc.grayscale(source_data, width, height, dest_matrix, code = 0)
+    // Assuming RGBA input from canvas ImageData
+    jsfeat.imgproc.grayscale(imageData.data, width, height, gray_img, jsfeat.COLOR_RGBA2GRAY);
+    console.info('Image converted to grayscale using JSFeat.');
 
-        warpedImg = perspectiveTransform_JS(src, cornerMarkerPoints);
-        if (!warpedImg || warpedImg.empty()) {
-            updateDecodeResultUI('Decoding failed: Perspective transform failed or resulted in empty image.');
-            return null;
+    // Apply Gaussian blur
+    // jsfeat.imgproc.gaussian_blur(source_matrix, dest_matrix, kernel_size, sigma = 0)
+    // Kernel size should be odd and positive. Let's use 5x5 with sigma 0 (auto-calculated)
+    const kernel_size = 5; // Example kernel size
+    const sigma = 0;       // Auto-calculate sigma from kernel_size
+    jsfeat.imgproc.gaussian_blur(gray_img, img_u8_smooth, kernel_size, sigma);
+    console.info('Grayscale image blurred using JSFeat.');
+
+    // For now, we'll log the dimensions of the processed image.
+    // The rest of the OpenCV-dependent code will remain until replaced in later steps.
+    console.log('JSFeat processed image (smooth):', img_u8_smooth.cols, 'x', img_u8_smooth.rows);
+
+    // --- Start of JSFeat Binarization ---
+    const otsu_thresh_val = otsu_threshold_jsfeat(img_u8_smooth);
+    console.info('Calculated Otsu threshold:', otsu_thresh_val);
+
+    let binary_img = new jsfeat.matrix_t(width, height, jsfeat.U8_t | jsfeat.C1_t);
+    // Assuming markers are dark (low pixel values) on a light background.
+    // THRESH_BINARY_INV makes pixels < thresh white (255).
+    // So, if src_matrix.data[i] (marker pixel) <= threshold, it should be 255. This is invert = true.
+    apply_threshold_jsfeat(img_u8_smooth, binary_img, otsu_thresh_val, true); // true for inverted behavior
+    console.info('Image binarized using Otsu threshold with JSFeat. Dimensions:', binary_img.cols, 'x', binary_img.rows);
+    // --- End of JSFeat Binarization ---
+
+    const marker_candidates = findMarkerCandidates_jsfeat(binary_img);
+    console.info(`Found ${marker_candidates.length} initial marker candidates using JSFeat CCL.`);
+    // marker_candidates.forEach(candidate => { // Verbose logging, can be enabled for debug
+    //     console.log(`  Candidate ${candidate.label}: x=${candidate.x}, y=${candidate.y}, w=${candidate.width}, h=${candidate.height}, area=${candidate.area}, aspect_ratio=${(candidate.width/candidate.height).toFixed(2)}`);
+    // });
+
+    const markerPatternForVerification = [ // Simpler, color-only, for JSFeat path
+        ['black', 'black', 'black'],
+        ['black', 'white', 'black'],
+        ['black', 'black', 'black']
+    ];
+
+    console.time("verifyAndFilterMarkers_jsfeat");
+    const verified_markers_raw = verifyAndFilterMarkers_jsfeat(marker_candidates, img_u8_smooth, markerPatternForVerification);
+    console.timeEnd("verifyAndFilterMarkers_jsfeat");
+    console.info(`Found ${verified_markers_raw.length} markers after pattern verification.`);
+
+    console.time("nonMaxSuppression_jsfeat");
+    const final_jsfeat_markers = nonMaxSuppression_jsfeat(verified_markers_raw, 0.3);
+    console.timeEnd("nonMaxSuppression_jsfeat");
+    console.info(`Found ${final_jsfeat_markers.length} markers after NMS.`);
+    // final_jsfeat_markers.forEach(marker => { // Verbose
+    //     console.log(`  Final JSFeat Marker: x=${marker.x}, y=${marker.y}, w=${marker.width}, h=${marker.height}, area=${marker.area}`);
+    // });
+
+    // --- JSFeat Global Perspective Transform ---
+    console.time("selectCornerMarkers_jsfeat");
+    const selected_jsfeat_code_corners = selectCornerMarkers_jsfeat(final_jsfeat_markers, width, height);
+    console.timeEnd("selectCornerMarkers_jsfeat");
+
+    let warped_img_jsfeat = null; // Will hold the final warped image from JSFeat path
+
+    if (selected_jsfeat_code_corners) {
+        console.info("Selected JSFeat code corners:", selected_jsfeat_code_corners);
+        const { TL_code_corner: TL_c, TR_code_corner: TR_c, BL_code_corner: BL_c } = selected_jsfeat_code_corners;
+
+        if (TL_c && TR_c && BL_c) {
+            const BR_c_est = { x: TR_c.x + BL_c.x - TL_c.x, y: TR_c.y + BL_c.y - TL_c.y };
+            const src_transform_pts_jsfeat = [TL_c, TR_c, BR_c_est, BL_c];
+
+            const wis = WARPED_IMAGE_SIZE;
+            const dst_transform_pts_jsfeat = [{x:0,y:0}, {x:wis-1,y:0}, {x:wis-1,y:wis-1}, {x:0,y:wis-1}];
+
+            const flattened_src_jsfeat = [];
+            src_transform_pts_jsfeat.forEach(p => { flattened_src_jsfeat.push(p.x); flattened_src_jsfeat.push(p.y); });
+            const flattened_dst_jsfeat = [];
+            dst_transform_pts_jsfeat.forEach(p => { flattened_dst_jsfeat.push(p.x); flattened_dst_jsfeat.push(p.y); });
+
+            let H_global_matrix = new jsfeat.matrix_t(3, 3, jsfeat.F32_t | jsfeat.C1_t);
+            let H_global_inv_matrix = new jsfeat.matrix_t(3, 3, jsfeat.F32_t | jsfeat.C1_t);
+
+            console.time("jsfeat_perspective_transform_calc");
+            jsfeat.math.perspective_4point_transform(H_global_matrix, flattened_src_jsfeat, flattened_dst_jsfeat);
+            jsfeat.matmath.invert_3x3(H_global_matrix, H_global_inv_matrix); // Invert for warp_perspective
+            console.timeEnd("jsfeat_perspective_transform_calc");
+
+            warped_img_jsfeat = new jsfeat.matrix_t(wis, wis, jsfeat.U8_t | jsfeat.C1_t);
+
+            console.time("jsfeat_warp_perspective");
+            jsfeat.imgproc.warp_perspective(img_u8_smooth, warped_img_jsfeat, H_global_inv_matrix, 0);
+            console.timeEnd("jsfeat_warp_perspective");
+
+            console.info('Global perspective transform with JSFeat complete. Warped image dimensions:', warped_img_jsfeat.cols, 'x', warped_img_jsfeat.rows);
+            // TODO: Next step is to use warped_img_jsfeat for grid symbol identification
+        } else {
+            console.error("JSFeat corner selection failed to return all three distinct corner points.");
+             // updateDecodeResultUI("Decoding failed: JSFeat could not determine code corners."); // Temporarily commented
+            return null; // Abort if corners aren't good.
         }
-        console.info('Image warped. Identifying symbols from grid...');
+    } else {
+        console.error("JSFeat marker corner selection failed.");
+        // updateDecodeResultUI("Decoding failed: JSFeat marker corner selection failed."); // Temporarily commented
+        return null; // Abort if corners not selected
+    }
+    // --- End JSFeat Global Perspective Transform ---
+
+    let decodedString = null; // Declare decodedString here to be accessible by both paths
+
+    // If JSFeat path produced a warped image, proceed with JSFeat symbol identification
+    if (warped_img_jsfeat) {
+        console.info("Attempting to decode symbols from JSFeat warped image...");
 
         for (const gridDim of POSSIBLE_GRID_DIMS) {
-            console.info(`Attempting decode with grid dimension: ${gridDim}x${gridDim}`);
-            updateDecodeResultUI(`Trying grid size: ${gridDim}x${gridDim}...`);
-
+            console.info(`JSFeat Path: Attempting decode with grid dimension: ${gridDim}x${gridDim}`);
             const singleCellSizePx = WARPED_IMAGE_SIZE / gridDim;
             const currentSymbolsFlatIndices = [];
 
@@ -148,226 +194,710 @@ async function decodeVisualCodeFromImage(imageElement) {
                     const yStart = Math.floor(rCell * singleCellSizePx);
                     const cellWidth = Math.floor((cCell + 1) * singleCellSizePx) - xStart;
                     const cellHeight = Math.floor((rCell + 1) * singleCellSizePx) - yStart;
+
                     if (cellWidth <=0 || cellHeight <=0) continue;
 
-                    const insetPx = Math.floor(singleCellSizePx * 0.15);
-                    const roiX = xStart + insetPx; const roiY = yStart + insetPx;
-                    const roiW = Math.max(1, cellWidth - 2 * insetPx); const roiH = Math.max(1, cellHeight - 2 * insetPx);
+                    const insetRatio = 0.15;
+                    const insetPxWidth = Math.floor(cellWidth * insetRatio);
+                    const insetPxHeight = Math.floor(cellHeight * insetRatio);
 
-                    if (roiX < 0 || roiY < 0 || roiX + roiW > warpedImg.cols || roiY + roiH > warpedImg.rows || roiW <=0 || roiH <=0) {
-                        currentSymbolsFlatIndices.push(symbolListJs.length); continue;
+                    const roiX = xStart + insetPxWidth;
+                    const roiY = yStart + insetPxHeight;
+                    const roiW = Math.max(1, cellWidth - 2 * insetPxWidth);
+                    const roiH = Math.max(1, cellHeight - 2 * insetPxHeight);
+
+                    if (roiX < 0 || roiY < 0 || roiX + roiW > WARPED_IMAGE_SIZE || roiY + roiH > WARPED_IMAGE_SIZE || roiW <=0 || roiH <=0) {
+                        console.warn(`Cell ROI out of bounds: x=${roiX},y=${roiY},w=${roiW},h=${roiH} for warped_img_jsfeat (${warped_img_jsfeat.cols}x${warped_img_jsfeat.rows})`);
+                        currentSymbolsFlatIndices.push(CUST_CODEC_SYMBOL_LIST.length);
+                        continue;
                     }
 
-                    let cellMat_rgba = null; let identifiedSymbol = null;
-                    try {
-                        cellMat_rgba = warpedImg.roi(new cv.Rect(roiX, roiY, roiW, roiH));
-                        identifiedSymbol = cellMat_rgba.empty() ? specialSymbolJs : identifySymbolJs(cellMat_rgba);
-                    } catch(e) { console.error("Error in cell ROI processing:", e.stack); identifiedSymbol = specialSymbolJs; }
-                    finally { if (cellMat_rgba && !cellMat_rgba.isDeleted()) cellMat_rgba.delete(); }
+                    let cell_matrix = new jsfeat.matrix_t(roiW, roiH, jsfeat.U8_t | jsfeat.C1_t);
+                    for (let r_copy = 0; r_copy < roiH; ++r_copy) {
+                        for (let c_copy = 0; c_copy < roiW; ++c_copy) {
+                            const src_idx = (roiY + r_copy) * warped_img_jsfeat.cols + (roiX + c_copy);
+                            const dst_idx = r_copy * roiW + c_copy;
+                            if (src_idx < warped_img_jsfeat.data.length && dst_idx < cell_matrix.data.length) {
+                                cell_matrix.data[dst_idx] = warped_img_jsfeat.data[src_idx];
+                            }
+                        }
+                    }
 
-                    let symbolIndex = symbolListJs.findIndex(s => s[0] === identifiedSymbol[0] && s[1] === identifiedSymbol[1]);
-                    if (symbolIndex === -1) symbolIndex = symbolListJs.length;
+                    const identifiedSymbol = identifySymbol_jsfeat(cell_matrix, CUST_CODEC_COLOR_RGB_MAP, CUST_CODEC_SYMBOL_LIST, CUST_CODEC_SPECIAL_SYMBOL);
+
+                    let symbolIndex = CUST_CODEC_SYMBOL_LIST.findIndex(s => s[0] === identifiedSymbol[0] && s[1] === identifiedSymbol[1]);
+                    if (symbolIndex === -1) {
+                        symbolIndex = CUST_CODEC_SYMBOL_LIST.length;
+                    }
                     currentSymbolsFlatIndices.push(symbolIndex);
                 }
             }
 
-            if (currentSymbolsFlatIndices.length === 0) { console.warn(`Grid ${gridDim}: No symbols extracted.`); continue; }
+            if (currentSymbolsFlatIndices.length === 0) {
+                console.warn(`JSFeat Path: Grid ${gridDim}: No symbols extracted.`);
+                continue;
+            }
 
             if (typeof fullDecodePipelineFromIndices === 'function') {
                 const resultString = await fullDecodePipelineFromIndices(currentSymbolsFlatIndices);
                 if (resultString !== null && resultString !== undefined) {
                     decodedString = resultString;
-                    console.info(`Successfully decoded with grid ${gridDim}x${gridDim}!`);
+                    console.info(`JSFeat Path: Successfully decoded with grid ${gridDim}x${gridDim}!`);
                     break;
-                } else { console.warn(`Grid ${gridDim}: fullDecodePipelineFromIndices returned null.`); updateDecodeResultUI(`Grid ${gridDim}x${gridDim} decode attempt failed. Trying next...`);}
-            } else { console.error('fullDecodePipelineFromIndices function is not available.'); break; }
+                } else {
+                    console.warn(`JSFeat Path: Grid ${gridDim} decode attempt failed (pipeline returned null).`);
+                }
+            } else {
+                console.error('fullDecodePipelineFromIndices function is not available. JSFeat path cannot complete decoding.');
+                decodedString = null;
+                break;
+            }
         }
 
-        if (!decodedString) {
-            updateDecodeResultUI('Failed to decode: Could not extract valid symbols or decode with any attempted grid dimension.');
-        }
-    } catch (error) {
-        console.error('Error during image decoding pipeline:', error, error.stack);
-        updateDecodeResultUI(`Error: ${error.message}`);
-    } finally {
-        if (src && !src.isDeleted()) src.delete();
-        if (gray && !gray.isDeleted()) gray.delete();
-        if (binary && !binary.isDeleted()) binary.delete();
-        if (warpedImg && !warpedImg.isDeleted()) warpedImg.delete();
         hideSpinnerUI('decode-spinner');
+        if (decodedString) {
+             console.info("Decoding successful using JSFeat pipeline. Skipping OpenCV fallback.");
+             return decodedString;
+        } else {
+            console.warn("JSFeat pipeline could not decode the image. Will proceed to OpenCV fallback if enabled.");
+        }
+    } else {
+         console.warn("JSFeat path did not produce a warped image. Skipping JSFeat symbol identification.");
+    }
+    // --- End of JSFeat Symbol Identification and Decoding Attempt ---
+
+    // --- Original OpenCV Path (Fallback / To be removed later if JSFeat is reliable) ---
+    if (!decodedString) { // Only run OpenCV path if JSFeat path failed to decode
+        console.info("Proceeding with OpenCV path as JSFeat path did not yield a result.");
+        showSpinnerUI('decode-spinner');
+
+        let src = null, gray = null, binary = null, warpedImg = null; // OpenCV Mats
+        try {
+            src = cv.imread(imageElement);
+            gray = new cv.Mat(); cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
+            binary = new cv.Mat(); cv.adaptiveThreshold(gray, binary, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 11, 2);
+
+            const markerObjects = findMarkers_JS(binary, markerPatternJsDefinition);
+            if (!markerObjects || markerObjects.length < 3) {
+                console.warn(`OpenCV Path: Decoding failed: Could not find enough markers. Found ${markerObjects ? markerObjects.length : 0}. Need 3.`);
+                if (src && !src.isDeleted()) src.delete(); if (gray && !gray.isDeleted()) gray.delete(); if (binary && !binary.isDeleted()) binary.delete();
+                hideSpinnerUI('decode-spinner'); return null;
+            }
+
+            const cornerMarkerPoints = selectCornerMarkers_JS(markerObjects, src.cols, src.rows);
+            if (!cornerMarkerPoints) {
+               console.warn('OpenCV Path: Decoding failed: Could not select corner markers.');
+               if (src && !src.isDeleted()) src.delete(); if (gray && !gray.isDeleted()) gray.delete(); if (binary && !binary.isDeleted()) binary.delete();
+               hideSpinnerUI('decode-spinner'); return null;
+            }
+
+            warpedImg = perspectiveTransform_JS(src, cornerMarkerPoints);
+            if (!warpedImg || warpedImg.empty()) {
+                console.warn('OpenCV Path: Decoding failed: Perspective transform failed or resulted in empty image.');
+                if (src && !src.isDeleted()) src.delete(); if (gray && !gray.isDeleted()) gray.delete(); if (binary && !binary.isDeleted()) binary.delete();
+                hideSpinnerUI('decode-spinner'); return null;
+            }
+            console.info('OpenCV Path: Image warped. Identifying symbols from grid...');
+
+            for (const gridDim of POSSIBLE_GRID_DIMS) {
+                console.info(`OpenCV Path: Attempting decode with grid dimension: ${gridDim}x${gridDim}`);
+                const singleCellSizePx = WARPED_IMAGE_SIZE / gridDim;
+                const currentSymbolsFlatIndices = [];
+
+                for (let rCell = 0; rCell < gridDim; rCell++) {
+                    for (let cCell = 0; cCell < gridDim; cCell++) {
+                        const isTopLeftMarkerArea = (rCell < markerSizeCells && cCell < markerSizeCells);
+                        const isTopRightMarkerArea = (rCell < markerSizeCells && cCell >= gridDim - markerSizeCells);
+                        const isBottomLeftMarkerArea = (rCell >= gridDim - markerSizeCells && cCell < markerSizeCells);
+                        if (isTopLeftMarkerArea || isTopRightMarkerArea || isBottomLeftMarkerArea) continue;
+
+                        const xStart = Math.floor(cCell * singleCellSizePx);
+                        const yStart = Math.floor(rCell * singleCellSizePx);
+                        const cellWidth = Math.floor((cCell + 1) * singleCellSizePx) - xStart;
+                        const cellHeight = Math.floor((rCell + 1) * singleCellSizePx) - yStart;
+                        if (cellWidth <=0 || cellHeight <=0) continue;
+
+                        const insetPx = Math.floor(singleCellSizePx * 0.15);
+                        const roiX = xStart + insetPx; const roiY = yStart + insetPx;
+                        const roiW = Math.max(1, cellWidth - 2 * insetPx); const roiH = Math.max(1, cellHeight - 2 * insetPx);
+
+                        if (roiX < 0 || roiY < 0 || roiX + roiW > warpedImg.cols || roiY + roiH > warpedImg.rows || roiW <=0 || roiH <=0) {
+                            currentSymbolsFlatIndices.push(symbolListJs.length); continue;
+                        }
+
+                        let cellMat_rgba_cv = null; let identifiedSymbol_cv = null;
+                        try {
+                            cellMat_rgba_cv = warpedImg.roi(new cv.Rect(roiX, roiY, roiW, roiH));
+                            identifiedSymbol_cv = cellMat_rgba_cv.empty() ? specialSymbolJs : identifySymbolJs(cellMat_rgba_cv);
+                        } catch(e) { console.error("Error in OpenCV cell ROI processing:", e.stack); identifiedSymbol_cv = specialSymbolJs; }
+                        finally { if (cellMat_rgba_cv && !cellMat_rgba_cv.isDeleted()) cellMat_rgba_cv.delete(); }
+
+                        let symbolIndex_cv = symbolListJs.findIndex(s => s[0] === identifiedSymbol_cv[0] && s[1] === identifiedSymbol_cv[1]);
+                        if (symbolIndex_cv === -1) symbolIndex_cv = symbolListJs.length;
+                        currentSymbolsFlatIndices.push(symbolIndex_cv);
+                    }
+                }
+
+                if (currentSymbolsFlatIndices.length === 0) { console.warn(`OpenCV Path: Grid ${gridDim}: No symbols extracted.`); continue; }
+
+                if (typeof fullDecodePipelineFromIndices === 'function') {
+                    const resultString = await fullDecodePipelineFromIndices(currentSymbolsFlatIndices);
+                    if (resultString !== null && resultString !== undefined) {
+                        decodedString = resultString;
+                        console.info(`OpenCV Path: Successfully decoded with grid ${gridDim}x${gridDim}!`);
+                        break;
+                    } else {
+                        console.warn(`OpenCV Path: Grid ${gridDim} decode attempt failed.`);
+                    }
+                } else {
+                    console.error('OpenCV Path: fullDecodePipelineFromIndices function is not available.');
+                    break;
+                }
+            }
+
+            if (!decodedString) {
+                console.warn("OpenCV Path: Failed to decode with any attempted grid dimension.");
+            }
+
+        } catch (error) {
+            console.error('Error during OpenCV decoding pipeline:', error, error.stack);
+        } finally {
+            if (src && !src.isDeleted()) src.delete();
+            if (gray && !gray.isDeleted()) gray.delete();
+            if (binary && !binary.isDeleted()) binary.delete();
+            if (warpedImg && !warpedImg.isDeleted()) warpedImg.delete();
+            hideSpinnerUI('decode-spinner');
+        }
     }
     return decodedString;
 }
 
-/**
- * Verifies if a candidate image region matches the expected 3x3 marker pattern.
- * @param {cv.Mat} markerCandidateImage - A binary OpenCV Mat of the candidate region.
- * @param {Array<Array<Array<String>>>} expectedPatternSymbols - The 3x3 marker pattern definition.
- * @returns {Boolean} True if the pattern matches, false otherwise.
- */
-function verifyMarkerPatternCV_JS(markerCandidateImage, expectedPatternSymbols) {
-    const height = markerCandidateImage.rows; const width = markerCandidateImage.cols;
-    if (height === 0 || width === 0) return false;
-    const cell_h = Math.floor(height / markerSizeCells); const cell_w = Math.floor(width / markerSizeCells);
-    if (cell_h === 0 || cell_w === 0) return false;
-    const expectedBinaryPattern = [];
-    for (let r = 0; r < markerSizeCells; r++) { const currentRow = []; for (let c = 0; c < markerSizeCells; c++) {
-            const colorName = expectedPatternSymbols[r][c][0];
-            if (colorName === 'black') currentRow.push(255); else if (colorName === 'white') currentRow.push(0); else return false;
-        } expectedBinaryPattern.push(currentRow); }
-    const observedPattern = [];
-    for (let r_cell = 0; r_cell < markerSizeCells; r_cell++) { const observedRow = []; for (let c_cell = 0; c_cell < markerSizeCells; c_cell++) {
-            const cellRect = new cv.Rect(c_cell * cell_w, r_cell * cell_h, cell_w, cell_h);
-            let cell = null; // Define for finally block
-            try {
-                cell = markerCandidateImage.roi(cellRect);
-                if (cell.empty()) return false;
-                const meanIntensity = cv.mean(cell)[0]; observedRow.push(meanIntensity > 127 ? 255 : 0);
-            } finally { if(cell && !cell.isDeleted()) cell.delete(); }
-        } observedPattern.push(observedRow); }
-    for (let r = 0; r < markerSizeCells; r++) { for (let c = 0; c < markerSizeCells; c++) { if (observedPattern[r][c] !== expectedBinaryPattern[r][c]) return false; }}
-    return true;
+
+// --- JSFeat Symbol Identification ---
+let precalculatedLuminances = null;
+
+function getGrayscaleLuminance(r, g, b) {
+    return 0.299 * r + 0.587 * g + 0.114 * b;
 }
 
-/**
- * Finds all 3x3 markers in a binary image.
- * @param {cv.Mat} binaryImageMat - An OpenCV binary image (THRESH_BINARY_INV, markers are white).
- * @param {Array<Array<Array<String>>>} expectedPattern - The 3x3 marker pattern definition.
- * @returns {Array<Object>} A list of verified marker objects, each like {rect: {x,y,w,h}, points: [{x,y},...]}.
- */
-function findMarkers_JS(binaryImageMat, expectedPattern) {
-    let contours = new cv.MatVector(); let hierarchy = new cv.Mat(); const foundMarkers = [];
-    cv.findContours(binaryImageMat, contours, hierarchy, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE);
-    for (let i = 0; i < contours.size(); ++i) {
-        let currentContour = contours.get(i);
-        let currentHierarchy = hierarchy.data32S.slice(i * 4, (i + 1) * 4);
-        let area = cv.contourArea(currentContour);
-        let approx = null, markerROI = null, resizedROI = null;
-        try {
-            if (area < 100) continue;
-            approx = new cv.Mat(); cv.approxPolyDP(currentContour, approx, 0.04 * cv.arcLength(currentContour, true), true);
-            if (approx.rows === 4 && cv.isContourConvex(approx)) {
-                let rect = cv.boundingRect(approx); let ar = rect.width / rect.height;
-                if (ar >= 0.75 && ar <= 1.25) {
-                    let childIdx = currentHierarchy[2]; if (childIdx !== -1) {
-                        let grandchildIdx = hierarchy.data32S[childIdx * 4 + 2]; if (grandchildIdx !== -1) {
-                            markerROI = binaryImageMat.roi(rect);
-                            let stdVerifySize = 3 * 15; let dVS = new cv.Size(stdVerifySize, stdVerifySize);
-                            resizedROI = new cv.Mat(); cv.resize(markerROI, resizedROI, dVS, 0, 0, cv.INTER_NEAREST);
-                            if (verifyMarkerPatternCV_JS(resizedROI, expectedPattern)) {
-                                let points = []; for (let ptIdx = 0; ptIdx < approx.rows; ptIdx++) { points.push({ x: approx.data32S[ptIdx*2], y: approx.data32S[ptIdx*2+1] }); }
-                                foundMarkers.push({ rect: rect, points: points, contourForNMS: approx.clone() }); // Clone for NMS
-                            }
-                        } } } }
-        } catch(e) { console.error("Error in findMarkers_JS loop:", e.stack); }
-        finally {
-            if(currentContour && !currentContour.isDeleted()) currentContour.delete(); // From contours.get(i)
-            if(approx && !approx.isDeleted()) approx.delete();
-            if(markerROI && !markerROI.isDeleted()) markerROI.delete();
-            if(resizedROI && !resizedROI.isDeleted()) resizedROI.delete();
+function precalculateColorLuminances(color_map) {
+    // Assumes color_map is like CUST_CODEC_COLOR_RGB_MAP
+    if (!precalculatedLuminances) {
+        precalculatedLuminances = {};
+        for (const colorName in color_map) {
+            if (colorName === 'background') continue;
+            const color = color_map[colorName];
+            precalculatedLuminances[colorName] = getGrayscaleLuminance(color.r, color.g, color.b);
         }
     }
-    if(contours && !contours.isDeleted()) contours.delete();
-    if(hierarchy && !hierarchy.isDeleted()) hierarchy.delete();
-    if (foundMarkers.length === 0) return [];
-
-    foundMarkers.sort((a, b) => (b.rect.width * b.rect.height) - (a.rect.width * a.rect.height));
-    const finalMarkers = []; const iouThreshold = 0.3;
-    while (foundMarkers.length > 0) {
-        const current = foundMarkers.shift(); finalMarkers.push(current); let remaining = [];
-        for (const other of foundMarkers) {
-            const x1 = Math.max(current.rect.x, other.rect.x); const y1 = Math.max(current.rect.y, other.rect.y);
-            const x2 = Math.min(current.rect.x + current.rect.width, other.rect.x + other.rect.width);
-            const y2 = Math.min(current.rect.y + current.rect.height, other.rect.y + other.rect.height);
-            const interW = Math.max(0, x2 - x1); const interH = Math.max(0, y2 - y1); const interA = interW * interH;
-            const currentA = current.rect.width * current.rect.height; const otherA = other.rect.width * other.rect.height;
-            const unionA = currentA + otherA - interA;
-            if (unionA === 0 || (interA / unionA) < iouThreshold) { remaining.push(other); }
-            else { if(other.contourForNMS && !other.contourForNMS.isDeleted()) other.contourForNMS.delete(); } // Delete suppressed
-        } foundMarkers.splice(0, foundMarkers.length, ...remaining);
-    }
-    // Clean up remaining contours from finalMarkers
-    finalMarkers.forEach(m => { if(m.contourForNMS && !m.contourForNMS.isDeleted()) m.contourForNMS.delete(); delete m.contourForNMS; });
-    return finalMarkers;
+    return precalculatedLuminances;
 }
 
-function getCenter(rect) { return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }; }
-
 /**
- * Selects the top-left (TL), top-right (TR), and bottom-left (BL) markers from a list of detected markers.
- * @param {Array<Object>} markerObjects - List of marker objects, each {rect: {x,y,w,h}, points: [...]}.
+ * Identifies the visual symbol (color and shape) from a cell matrix using JSFeat.
+ * @param {jsfeat.matrix_t} cell_matrix - Grayscale image of the cell.
+ * @param {Object} color_map - e.g., CUST_CODEC_COLOR_RGB_MAP.
+ * @param {Array} symbol_list - e.g., CUST_CODEC_SYMBOL_LIST.
+ * @param {Array} special_symbol - e.g., CUST_CODEC_SPECIAL_SYMBOL.
+ * @returns {Array<String>} An array containing [colorName, shapeName].
+ */
+function identifySymbol_jsfeat(cell_matrix, color_map, symbol_list, special_symbol) {
+    if (!cell_matrix || cell_matrix.rows === 0 || cell_matrix.cols === 0 || !cell_matrix.data || cell_matrix.data.length === 0) {
+        return [...special_symbol];
+    }
+
+    // Ensure CUST_CODEC constants are available or use local fallbacks for robustness
+    const current_color_map = color_map || window.CUST_CODEC_COLOR_RGB_MAP || colorRgbMapJs; // Fallback to local if global/param not set
+    const current_special_symbol = special_symbol || window.CUST_CODEC_SPECIAL_SYMBOL || specialSymbolJs;
+
+    const luminances = precalculateColorLuminances(current_color_map);
+    let detectedColorName = 'gray';
+
+    let sum_intensity = 0;
+    let num_pixels_sampled = 0;
+    const borderSkipX = Math.floor(cell_matrix.cols * 0.2);
+    const borderSkipY = Math.floor(cell_matrix.rows * 0.2);
+
+    for (let r = borderSkipY; r < cell_matrix.rows - borderSkipY; ++r) {
+        for (let c = borderSkipX; c < cell_matrix.cols - borderSkipX; ++c) {
+            sum_intensity += cell_matrix.data[r * cell_matrix.cols + c];
+            num_pixels_sampled++;
+        }
+    }
+    if (num_pixels_sampled === 0) {
+        for(let i=0; i < cell_matrix.data.length; ++i) sum_intensity += cell_matrix.data[i];
+        num_pixels_sampled = cell_matrix.data.length;
+    }
+    if (num_pixels_sampled === 0) return [...current_special_symbol];
+
+    const avg_cell_intensity = sum_intensity / num_pixels_sampled;
+
+    let min_lum_diff = Infinity;
+    let bestMatchColor = 'gray'; // Start with gray
+    for (const colorName in luminances) { // Iterate over precalculated luminances
+        const diff = Math.abs(avg_cell_intensity - luminances[colorName]);
+        if (diff < min_lum_diff) {
+            min_lum_diff = diff;
+            bestMatchColor = colorName;
+        }
+    }
+
+    // Tunable threshold for color matching. If no color is "close enough", consider it an error or 'gray'.
+    if (min_lum_diff <= 50) {
+        detectedColorName = bestMatchColor;
+    } else {
+        return [...current_special_symbol];
+    }
+    // If the best match is 'gray' from the color map (and it's a valid symbol color), it's fine.
+    // If no color was close enough, we already returned special_symbol.
+
+    let detectedShape = 'square'; // Default shape
+
+    let binary_cell_matrix = new jsfeat.matrix_t(cell_matrix.cols, cell_matrix.rows, jsfeat.U8_t | jsfeat.C1_t);
+    const cell_otsu_thresh = otsu_threshold_jsfeat(cell_matrix);
+    apply_threshold_jsfeat(cell_matrix, binary_cell_matrix, cell_otsu_thresh, true);
+
+    let fgPixels = 0;
+    for(let i=0; i < binary_cell_matrix.data.length; ++i) if(binary_cell_matrix.data[i] === 255) fgPixels++;
+
+    if (fgPixels / (binary_cell_matrix.data.length || 1) < 0.05) { // Reduced threshold for sparse cells
+        return [detectedColorName, 'square'];
+    }
+
+    let min_fx = cell_matrix.cols, min_fy = cell_matrix.rows, max_fx = -1, max_fy = -1;
+    let symbol_area_in_cell = 0;
+    for (let r = 0; r < cell_matrix.rows; ++r) {
+        for (let c = 0; c < cell_matrix.cols; ++c) {
+            if (binary_cell_matrix.data[r * cell_matrix.cols + c] === 255) {
+                symbol_area_in_cell++;
+                min_fx = Math.min(min_fx, c);
+                min_fy = Math.min(min_fy, r);
+                max_fx = Math.max(max_fx, c);
+                max_fy = Math.max(max_fy, r);
+            }
+        }
+    }
+
+    if (symbol_area_in_cell < (cell_matrix.rows * cell_matrix.cols * 0.03) || max_fx < min_fx || max_fy < min_fy ) { // Reduced min area
+        return [detectedColorName, 'square'];
+    }
+
+    const bw = max_fx - min_fx + 1;
+    const bh = max_fy - min_fy + 1;
+
+    if (bw <=0 || bh <=0) return [detectedColorName, 'square'];
+
+    const fill_ratio = symbol_area_in_cell / (bw * bh);
+    const aspect_ratio = bw / bh;
+
+    // Square: aspect ratio near 1, high fill ratio
+    if (aspect_ratio > 0.7 && aspect_ratio < 1.4 && fill_ratio > 0.7) {
+        detectedShape = 'square';
+    }
+    // Circle: aspect ratio near 1, moderate fill ratio (pi/4 ~ 0.785, but allow wider range for imperfect circles)
+    else if (aspect_ratio > 0.65 && aspect_ratio < 1.5 && fill_ratio > 0.5 && fill_ratio < 0.85) {
+         detectedShape = 'circle';
+    }
+    // Triangle: More varied aspect ratios, typically lower fill ratio than squares/circles
+    // This is the hardest to distinguish with simple bounding box metrics.
+    else if (fill_ratio > 0.3 && fill_ratio < 0.7) {
+        // Could try to distinguish from elongated rectangles if needed, but this is very basic
+        detectedShape = 'triangle';
+    }
+    // Default to square if heuristics are ambiguous
+    else {
+        detectedShape = 'square';
+    }
+    return [detectedColorName, detectedShape];
+}
+
+
+// --- JSFeat Corner Marker Selection ---
+/**
+ * Selects the top-left (TL), top-right (TR), and bottom-left (BL) markers from a list of JSFeat-detected markers.
+ * @param {Array<Object>} jsfeat_markers - Array of marker objects, each with x, y, width, height, area, and points (bounding box corners).
  * @param {Number} imageWidth - Width of the original image.
  * @param {Number} imageHeight - Height of the original image.
- * @returns {Object|null} An object {TL: {x,y}, TR: {x,y}, BL: {x,y}} for the corners of the overall code area, or null if selection fails.
+ * @returns {Object|null} An object { TL_code_corner, TR_code_corner, BL_code_corner } for the corners of the overall code area, or null.
  */
-function selectCornerMarkers_JS(markerObjects, imageWidth, imageHeight) {
-    if (markerObjects.length < 3) { console.warn("Not enough markers for corner selection:", markerObjects.length); return null; }
-    const markers = markerObjects.map(m => ({ ...m, center: getCenterOfPoints(m.points) })); // Use center of points for better accuracy
+function selectCornerMarkers_jsfeat(jsfeat_markers, imageWidth, imageHeight) {
+    if (!jsfeat_markers || jsfeat_markers.length < 3) {
+        console.warn("selectCornerMarkers_jsfeat: Not enough JSFeat markers for corner selection:", jsfeat_markers ? jsfeat_markers.length : 0);
+        return null;
+    }
+
+    // Create a working copy and add center points
+    const markers = jsfeat_markers.map(m => ({
+        ...m, // Includes x, y, width, height, area, points (bbox corners)
+        center: { x: m.x + m.width / 2, y: m.y + m.height / 2 }
+    }));
+
+    // Sort by sum of center coordinates to find Top-Left (TL) candidate
     markers.sort((a, b) => (a.center.x + a.center.y) - (b.center.x + b.center.y));
-    const tl = markers[0];
-    const remaining = markers.slice(1).map(m => ({...m, dx: m.center.x - tl.center.x, dy: m.center.y - tl.center.y, angle: Math.atan2(m.center.y - tl.center.y, m.center.x - tl.center.x)}));
-    if (remaining.length < 2) { console.warn("Not enough remaining markers after TL selection."); return null; }
+    const tl_marker = markers[0];
 
-    remaining.sort((a,b) => a.angle - b.angle);
+    // Calculate angles of other markers relative to TL's center
+    const remaining_markers = markers.slice(1).map(m => {
+        const dx = m.center.x - tl_marker.center.x;
+        const dy = m.center.y - tl_marker.center.y;
+        // Normalize angle to be 0 to 2PI
+        let angle = Math.atan2(dy, dx);
+        if (angle < 0) angle += 2 * Math.PI;
+        return { ...m, angle: angle, dist_sq: dx*dx + dy*dy }; // Store distance for tie-breaking if needed
+    });
 
-    let tr = null, bl = null;
-    let bestTR = null, bestBL = null;
-    let minAngleDiffTR = Math.PI, minAngleDiffBL = Math.PI;
-
-    for(const cand of remaining){
-        if(cand.dx > 0.1 * tl.rect.width ){ let angleDiff = Math.abs(cand.angle); if(angleDiff < minAngleDiffTR){ minAngleDiffTR = angleDiff; bestTR = cand; }}
-        if(cand.dy > 0.1 * tl.rect.height){ let angleDiff = Math.abs(cand.angle - Math.PI/2); if(angleDiff < minAngleDiffBL){ minAngleDiffBL = angleDiff; bestBL = cand; }}
+    if (remaining_markers.length < 2) {
+        console.warn("selectCornerMarkers_jsfeat: Not enough remaining markers after TL selection.");
+        return null;
     }
 
-    if (bestTR && bestBL && bestTR !== bestBL) { tr = bestTR; bl = bestBL; }
-    else {
-        if(remaining.length >=2 && remaining[0] !== remaining[remaining.length-1]) { tr = remaining[0]; bl = remaining[remaining.length-1]; }
-        else if (remaining.length >=1 && tl !== remaining[0]) { tr = remaining[0]; const others = markerObjects.filter(m => m !== tl && m !== tr); if (others.length > 0) bl = others[0]; else { console.warn("Could not find distinct BL fallback."); return null;} }
-        else { console.warn("Fallback for TR/BL selection failed."); return null; }
-    }
+    // Sort remaining by angle
+    remaining_markers.sort((a, b) => a.angle - b.angle);
 
-    if (!tr || !bl || tr === bl) { console.warn("selectCornerMarkers_JS: Failed to select distinct TR and BL markers with final checks."); return null; }
+    let tr_marker = null;
+    let bl_marker = null;
 
-    const getCornerPt = (markerObj, type) => { // Uses actual contour points for precision
-        if (!markerObj.points || markerObj.points.length !== 4) { // Fallback to rect if points are bad
-            const r = markerObj.rect; if (type === 'TL') return {x: r.x, y: r.y}; if (type === 'TR') return {x: r.x + r.width, y: r.y}; if (type === 'BL') return {x: r.x, y: r.y + r.height}; return markerObj.center;
+    // Attempt to find TR and BL based on angles and relative positions
+    // TR: angle closest to 0 (or smallest positive).
+    // BL: angle closest to PI/2.
+    let best_tr_candidate = null;
+    let min_tr_angle_diff = Math.PI / 4; // Expect TR to be within +/- 45 deg of positive x-axis from TL
+
+    let best_bl_candidate = null;
+    let min_bl_angle_diff = Math.PI / 4; // Expect BL to be within +/- 45 deg of positive y-axis from TL (angle PI/2)
+
+    for (const cand of remaining_markers) {
+        // TR candidate: should be to the right of TL
+        if (cand.center.x > tl_marker.center.x) {
+            let angle_diff_from_0 = Math.min(Math.abs(cand.angle), Math.abs(cand.angle - 2 * Math.PI)); // Handle angles near 0 or 2PI
+            if (angle_diff_from_0 < min_tr_angle_diff) {
+                 // Basic check: TR y should be somewhat aligned with TL y
+                if (Math.abs(cand.center.y - tl_marker.center.y) < cand.height + tl_marker.height) { // Allow some y-offset
+                    min_tr_angle_diff = angle_diff_from_0;
+                    best_tr_candidate = cand;
+                }
+            }
         }
-        let pts = [...markerObj.points]; // Sort points for specific corner
-        if (type === 'TL') pts.sort((a,b) => (a.x + a.y) - (b.x + b.y)); // Smallest sum x+y
-        else if (type === 'TR') pts.sort((a,b) => (b.x - a.y) - (a.x - b.y)); // Largest x-y
-        else if (type === 'BL') pts.sort((a,b) => (a.x - b.y) - (b.x - a.y)); // Smallest x-y
-        return pts[0];
-    };
-    return { TL: getCornerPt(tl, 'TL'), TR: getCornerPt(tr, 'TR'), BL: getCornerPt(bl, 'BL') };
+
+        // BL candidate: should be below TL
+        if (cand.center.y > tl_marker.center.y) {
+            let angle_diff_from_90 = Math.abs(cand.angle - Math.PI / 2);
+            if (angle_diff_from_90 < min_bl_angle_diff) {
+                // Basic check: BL x should be somewhat aligned with TL x
+                if (Math.abs(cand.center.x - tl_marker.center.x) < cand.width + tl_marker.width) { // Allow some x-offset
+                    min_bl_angle_diff = angle_diff_from_90;
+                    best_bl_candidate = cand;
+                }
+            }
+        }
+    }
+
+    tr_marker = best_tr_candidate;
+    bl_marker = best_bl_candidate;
+
+    // Fallback if specific candidates not found (e.g. due to rotation or few markers)
+    if (!tr_marker || !bl_marker || tr_marker === bl_marker) {
+        console.warn("Initial TR/BL selection logic failed or found same marker. Using simpler angle sort fallback.");
+        // TR is likely the one with smallest angle (after TL)
+        // BL is likely the one with largest angle (or angle closest to PI/2 if many markers)
+        if (remaining_markers.length > 0) {
+            if (!tr_marker) tr_marker = remaining_markers[0]; // Smallest angle
+        }
+        if (remaining_markers.length > 1) {
+            // Try to find a BL distinct from TR
+            let potential_bl = remaining_markers.find(m => m !== tr_marker && Math.abs(m.angle - Math.PI/2) < Math.PI/3 ); // angle within 60deg of PI/2
+            if(!potential_bl) potential_bl = remaining_markers[remaining_markers.length-1]; // largest angle as fallback
+            if (!bl_marker || bl_marker === tr_marker) bl_marker = (potential_bl !== tr_marker) ? potential_bl : null;
+        }
+    }
+
+
+    if (!tl_marker || !tr_marker || !bl_marker || tl_marker === tr_marker || tl_marker === bl_marker || tr_marker === bl_marker) {
+        console.warn("selectCornerMarkers_jsfeat: Failed to select three distinct corner markers. Aborting selection.");
+        return null;
+    }
+
+    // Ensure points are ordered [TL, TR, BR, BL] for each marker's bounding box
+    // Our current .points from analyzeBlobs_jsfeat is already in this order:
+    // {x: minX, y: minY} (TL), {x: maxX, y: minY} (TR), {x: maxX, y: maxY} (BR), {x: minX, y: maxY} (BL)
+
+    const TL_code_corner = tl_marker.points[0]; // Top-left of TL marker
+    const TR_code_corner = tr_marker.points[1]; // Top-right of TR marker
+    const BL_code_corner = bl_marker.points[3]; // Bottom-left of BL marker (using index 3 for BL)
+
+    // Sanity check that selected corners are somewhat reasonable
+    if (!(TL_code_corner && TR_code_corner && BL_code_corner &&
+          TR_code_corner.x > TL_code_corner.x && // TR is to the right of TL
+          BL_code_corner.y > TL_code_corner.y    // BL is below TL
+        )) {
+        console.warn("selectCornerMarkers_jsfeat: Selected code corners do not form a valid TL, TR, BL arrangement.", TL_code_corner, TR_code_corner, BL_code_corner);
+        return null;
+    }
+
+    return { TL_code_corner, TR_code_corner, BL_code_corner };
+}
+
+
+// --- DSU Implementation ---
+class DSU {
+    constructor() { this.parent = {}; this.rank = {}; }
+    makeSet(item) { if (!(item in this.parent)) { this.parent[item] = item; this.rank[item] = 0; } }
+    find(item) {
+        if (!this.parent.hasOwnProperty(item)) { this.makeSet(item); return item;} // Should not happen if makeSet is called correctly
+        if (this.parent[item] === item) return item;
+        return this.parent[item] = this.find(this.parent[item]);
+    }
+    union(item1, item2) { let root1 = this.find(item1); let root2 = this.find(item2);
+        if (root1 !== root2) { if (this.rank[root1] < this.rank[root2]) [root1, root2] = [root2, root1];
+            this.parent[root2] = root1; if (this.rank[root1] === this.rank[root2]) this.rank[root1]++; } }
 }
 
 /**
- * Performs perspective transformation on an image based on three identified corner marker points.
- * @param {cv.Mat} srcImageMat - The source image (color).
- * @param {Object} cornerMarkerPoints - An object {TL: {x,y}, TR: {x,y}, BL: {x,y}} defining the source corners.
- * @returns {cv.Mat|null} The warped image Mat (color), or null on failure. Caller must delete the returned Mat.
+ * Performs Connected Components Labeling on a binary JSFeat matrix.
+ * @param {jsfeat.matrix_t} binary_matrix - Input binary image (U8_C1, 255 for foreground).
+ * @returns {jsfeat.matrix_t} A matrix of the same dimensions with S32_C1 type, containing component labels.
  */
-function perspectiveTransform_JS(srcImageMat, cornerMarkerPoints) {
-    const { TL, TR, BL } = cornerMarkerPoints;
-    const BR_est_x = TR.x + BL.x - TL.x; const BR_est_y = TR.y + BL.y - TL.y;
-    if ([TL.x, TL.y, TR.x, TR.y, BL.x, BL.y, BR_est_x, BR_est_y].some(pt => isNaN(pt) || !isFinite(pt))) { console.error("Perspective Transform: Invalid coordinates."); return null;}
-    const srcPtsData = [TL.x, TL.y, TR.x, TR.y, BR_est_x, BR_est_y, BL.x, BL.y];
-    const dstPtsData = [0,0, WARPED_IMAGE_SIZE-1,0, WARPED_IMAGE_SIZE-1,WARPED_IMAGE_SIZE-1, 0,WARPED_IMAGE_SIZE-1];
-    let srcPts = null, dstPts = null, M = null, warpedMat = new cv.Mat();
-    try { srcPts = cv.matFromArray(4, 1, cv.CV_32FC2, srcPtsData); dstPts = cv.matFromArray(4, 1, cv.CV_32FC2, dstPtsData);
-        if (srcPts.empty() || dstPts.empty()) throw new Error("Failed to create point matrices for perspective transform.");
-        M = cv.getPerspectiveTransform(srcPts, dstPts); if (M.empty()) throw new Error("getPerspectiveTransform returned empty matrix.");
-        cv.warpPerspective(srcImageMat, warpedMat, M, new cv.Size(WARPED_IMAGE_SIZE, WARPED_IMAGE_SIZE), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
-    } catch(e) { console.error("Perspective transform error:", e, e.stack); if(warpedMat && !warpedMat.isDeleted()) warpedMat.delete(); return null; }
-    finally { if(srcPts && !srcPts.isDeleted()) srcPts.delete(); if(dstPts && !dstPts.isDeleted()) dstPts.delete(); if(M && !M.isDeleted()) M.delete(); }
-    if (warpedMat.empty()) { console.error("Warped image is empty after transform."); if(!warpedMat.isDeleted()) warpedMat.delete(); return null; }
-    return warpedMat;
+function connectedComponentsLabeling_jsfeat(binary_matrix) {
+    const rows = binary_matrix.rows;
+    const cols = binary_matrix.cols;
+    const labels_matrix = new jsfeat.matrix_t(cols, rows, jsfeat.S32_t | jsfeat.C1_t); // Int32 for labels
+    const dsu = new DSU();
+    let next_label = 1;
+
+    // First Pass
+    for (let r = 0; r < rows; ++r) {
+        for (let c = 0; c < cols; ++c) {
+            const pixel_idx = r * cols + c;
+            if (binary_matrix.data[pixel_idx] === 255) { // Foreground pixel
+                let neighbors = [];
+                // Top neighbor
+                if (r > 0 && binary_matrix.data[(r - 1) * cols + c] === 255) {
+                    neighbors.push(labels_matrix.data[(r - 1) * cols + c]);
+                }
+                // Left neighbor
+                if (c > 0 && binary_matrix.data[r * cols + (c - 1)] === 255) {
+                    neighbors.push(labels_matrix.data[r * cols + (c - 1)]);
+                }
+
+                if (neighbors.length === 0) {
+                    labels_matrix.data[pixel_idx] = next_label;
+                    dsu.makeSet(next_label);
+                    next_label++;
+                } else {
+                    const min_neighbor_label = Math.min(...neighbors.filter(l => l > 0));
+                    labels_matrix.data[pixel_idx] = min_neighbor_label;
+                    neighbors.forEach(label => {
+                        if (label > 0 && label !== min_neighbor_label) {
+                            dsu.union(min_neighbor_label, label);
+                        }
+                    });
+                }
+            } else {
+                labels_matrix.data[pixel_idx] = 0; // Background
+            }
+        }
+    }
+
+    // Second Pass - Resolve labels
+    for (let i = 0; i < labels_matrix.data.length; ++i) {
+        if (labels_matrix.data[i] > 0) {
+            labels_matrix.data[i] = dsu.find(labels_matrix.data[i]);
+        }
+    }
+    return labels_matrix;
 }
+
+/**
+ * Analyzes labeled components (blobs) from a labels matrix.
+ * @param {jsfeat.matrix_t} labels_matrix - Matrix containing component labels (S32_C1).
+ * @param {jsfeat.matrix_t} binary_matrix - Original binary matrix (U8_C1), used for dimensions.
+ * @returns {Array<Object>} An array of blob objects with properties like label, pixels, bounds, area.
+ */
+function analyzeBlobs_jsfeat(labels_matrix, binary_matrix) {
+    const rows = binary_matrix.rows;
+    const cols = binary_matrix.cols;
+    const blobs = {};
+
+    for (let r = 0; r < rows; ++r) {
+        for (let c = 0; c < cols; ++c) {
+            const pixel_idx = r * cols + c;
+            const label = labels_matrix.data[pixel_idx];
+            if (label > 0) {
+                if (!blobs[label]) {
+                    blobs[label] = {
+                        label: label,
+                        pixels: [],
+                        minX: c, minY: r,
+                        maxX: c, maxY: r,
+                        area: 0
+                    };
+                }
+                // blobs[label].pixels.push({ x: c, y: r }); // Storing all pixels can be memory intensive
+                blobs[label].minX = Math.min(blobs[label].minX, c);
+                blobs[label].minY = Math.min(blobs[label].minY, r);
+                blobs[label].maxX = Math.max(blobs[label].maxX, c);
+                blobs[label].maxY = Math.max(blobs[label].maxY, r);
+                blobs[label].area++;
+            }
+        }
+    }
+
+    const blob_array = Object.values(blobs);
+    blob_array.forEach(blob => {
+        blob.width = blob.maxX - blob.minX + 1;
+        blob.height = blob.maxY - blob.minY + 1;
+        blob.x = blob.minX;
+        blob.y = blob.minY;
+        // Define points for the bounding box of the blob
+        blob.points = [
+            {x: blob.minX, y: blob.minY},                            // Top-left
+            {x: blob.maxX, y: blob.minY},                            // Top-right
+            {x: blob.maxX, y: blob.maxY},                            // Bottom-right
+            {x: blob.minX, y: blob.maxY}                             // Bottom-left
+        ];
+    });
+    return blob_array;
+}
+
+/**
+ * Finds marker candidates in a binary image using CCL and blob analysis.
+ * @param {jsfeat.matrix_t} binary_matrix - The input binary image (U8_C1).
+ * @returns {Array<Object>} An array of filtered marker candidate objects.
+ */
+function findMarkerCandidates_jsfeat(binary_matrix) {
+    if (!binary_matrix || !binary_matrix.data || binary_matrix.data.length === 0) {
+        console.warn("findMarkerCandidates_jsfeat: binary_matrix is empty or invalid.");
+        return [];
+    }
+    console.time("CCL_jsfeat");
+    const labels_matrix = connectedComponentsLabeling_jsfeat(binary_matrix);
+    console.timeEnd("CCL_jsfeat");
+
+    console.time("analyzeBlobs_jsfeat");
+    const raw_blobs = analyzeBlobs_jsfeat(labels_matrix, binary_matrix);
+    console.timeEnd("analyzeBlobs_jsfeat");
+
+    // Initial conservative filters - these will likely need tuning
+    const min_area = 30; // Adjusted from 50, depends on expected marker size at typical camera distance
+    const max_area = (binary_matrix.cols * binary_matrix.rows) / 9; // Max 1/9th of image area
+    const min_aspect_ratio = 0.4; // Adjusted from 0.5
+    const max_aspect_ratio = 2.5; // Adjusted from 2.0
+
+    const marker_candidates = raw_blobs.filter(blob => {
+        const aspect_ratio = blob.width / blob.height;
+        return blob.area >= min_area &&
+               blob.area <= max_area &&
+               aspect_ratio >= min_aspect_ratio &&
+               aspect_ratio <= max_aspect_ratio;
+    });
+    // Sort by area, descending - largest are often better candidates or easier to verify first
+    marker_candidates.sort((a,b) => b.area - a.area);
+    return marker_candidates;
+}
+
+
+/**
+ * Calculates the histogram of a JSFeat U8_C1 matrix.
+ * @param {jsfeat.matrix_t} src_matrix - The source grayscale image.
+ * @returns {Array<number>} An array of 256 elements representing the histogram.
+ */
+function calculate_histogram_jsfeat(src_matrix) {
+    let hist = new Array(256).fill(0);
+    for (let i = 0; i < src_matrix.data.length; ++i) {
+        hist[src_matrix.data[i]]++;
+    }
+    return hist;
+}
+
+/**
+ * Calculates the optimal threshold using Otsu's method.
+ * @param {jsfeat.matrix_t} src_matrix - The source grayscale image.
+ * @returns {number} The calculated Otsu threshold.
+ */
+function otsu_threshold_jsfeat(src_matrix) {
+    const hist = calculate_histogram_jsfeat(src_matrix);
+    const total_pixels = src_matrix.rows * src_matrix.cols;
+
+    let sum = 0;
+    for (let i = 0; i < 256; ++i) {
+        sum += i * hist[i];
+    }
+
+    let sum_bg = 0;
+    let weight_bg = 0;
+    let weight_fg = 0;
+    let max_variance = 0;
+    let threshold = 0;
+
+    for (let i = 0; i < 256; ++i) {
+        weight_bg += hist[i];
+        if (weight_bg === 0) continue;
+
+        weight_fg = total_pixels - weight_bg;
+        if (weight_fg === 0) break;
+
+        sum_bg += i * hist[i];
+
+        let mean_bg = sum_bg / weight_bg;
+        let mean_fg = (sum - sum_bg) / weight_fg;
+
+        let variance_between = weight_bg * weight_fg * Math.pow(mean_bg - mean_fg, 2);
+
+        if (variance_between > max_variance) {
+            max_variance = variance_between;
+            threshold = i;
+        }
+    }
+    return threshold;
+}
+
+/**
+ * Applies a threshold to a JSFeat U8_C1 matrix to produce a binary image.
+ * @param {jsfeat.matrix_t} src_matrix - The source grayscale image.
+ * @param {jsfeat.matrix_t} dest_matrix - The destination binary image.
+ * @param {number} threshold - The threshold value.
+ * @param {boolean} invert - If true, pixels <= threshold become 255 (white), else 0.
+ */
+function apply_threshold_jsfeat(src_matrix, dest_matrix, threshold, invert = false) {
+    const white = 255;
+    const black = 0;
+    for (let i = 0; i < src_matrix.data.length; ++i) {
+        if (invert) {
+            dest_matrix.data[i] = src_matrix.data[i] <= threshold ? white : black;
+        } else {
+            dest_matrix.data[i] = src_matrix.data[i] > threshold ? white : black;
+        }
+    }
+}
+
+// All old OpenCV-dependent helper functions (verifyMarkerPatternCV_JS, findMarkers_JS, getCenter, selectCornerMarkers_JS, perspectiveTransform_JS)
+// have been removed as part of the full JSFeat migration.
 
 // UI Helper functions
 /** Updates the decode result display area. @param {String} message - HTML string to display. */
-function updateDecodeResultUI(message) { const resultDiv = document.getElementById('decode-result'); if (resultDiv) resultDiv.innerHTML = `<p>${message}</p>`; }
+function updateDecodeResultUI(message) {
+    const resultDiv = document.getElementById('decode-result');
+    if (resultDiv) {
+        resultDiv.innerHTML = `<p>${message}</p>`;
+    } else {
+        console.warn("UI element 'decode-result' not found for message:", message);
+    }
+}
 /** Shows a spinner element. @param {String} spinnerId - ID of the spinner element. */
-function showSpinnerUI(spinnerId) { const spinner = document.getElementById(spinnerId); if (spinner) spinner.style.display = 'block'; }
+function showSpinnerUI(spinnerId) {
+    const spinner = document.getElementById(spinnerId);
+    if (spinner) {
+        spinner.style.display = 'block';
+    } else {
+        console.warn("Spinner UI element not found:", spinnerId);
+    }
+}
 /** Hides a spinner element. @param {String} spinnerId - ID of the spinner element. */
-function hideSpinnerUI(spinnerId) { const spinner = document.getElementById(spinnerId); if (spinner) spinner.style.display = 'none'; }
+function hideSpinnerUI(spinnerId) {
+    const spinner = document.getElementById(spinnerId);
+    if (spinner) {
+        spinner.style.display = 'none';
+    } else {
+        console.warn("Spinner UI element not found:", spinnerId);
+    }
+}
