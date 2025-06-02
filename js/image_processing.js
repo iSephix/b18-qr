@@ -817,21 +817,51 @@ function verifyAndFilterMarkers_jsfeat(marker_candidates, source_image, marker_p
 
                 const avg_intensity = sum_intensity / num_pixels;
                 sampled_pattern_intensity[r][c] = avg_intensity;
+                // Log average intensity but defer binary conversion
                 window.logToScreen(`verifyAndFilterMarkers_jsfeat: Candidate ${i}, cell [${r}][${c}]: avg_intensity = ${avg_intensity.toFixed(2)} (from ${num_pixels} pixels)`);
-
-                // Convert to binary based on Otsu threshold
-                // If avg_intensity is low (dark), it's 'black'. If high (light), it's 'white'.
-                derived_binary_pattern[r][c] = (avg_intensity <= otsu_threshold_val) ? 'black' : 'white';
             }
-            if (!possible_marker) break;
+            if (!possible_marker) break; // Break from cell row loop
         }
 
-        if (!possible_marker) {
-            window.logToScreen(`verifyAndFilterMarkers_jsfeat: Candidate ${i} skipped due to cell processing issues.`);
+        if (!possible_marker) { // Check if any cell failed
+            window.logToScreen(`verifyAndFilterMarkers_jsfeat: Candidate ${i} skipped due to cell processing issues before local thresholding.`);
+            continue; // Skip to the next candidate
+        }
+
+        // All 9 cell intensities are collected, now calculate local threshold
+        const cell_intensities = [];
+        for (let r_idx = 0; r_idx < 3; r_idx++) {
+            for (let c_idx = 0; c_idx < 3; c_idx++) {
+                cell_intensities.push(sampled_pattern_intensity[r_idx][c_idx]);
+            }
+        }
+
+        if (cell_intensities.length !== 9) {
+            window.logToScreen(`verifyAndFilterMarkers_jsfeat: Candidate ${i} did not have 9 cell intensities for local threshold. Skipping.`);
             continue;
         }
 
-        window.logToScreen(`verifyAndFilterMarkers_jsfeat: Candidate ${i}: Derived pattern: ${JSON.stringify(derived_binary_pattern)}`);
+        const min_intensity = Math.min(...cell_intensities);
+        const max_intensity = Math.max(...cell_intensities);
+
+        // Check if min and max are substantially different. If not, it's likely not a valid marker.
+        // A very small difference might also lead to an unstable threshold.
+        if (max_intensity - min_intensity < 10) { // Threshold can be tuned, e.g. 10 gray levels
+            window.logToScreen(`verifyAndFilterMarkers_jsfeat: Candidate ${i}: min/max cell intensity difference too small (${(max_intensity - min_intensity).toFixed(2)}). Unlikely to be a valid marker. Skipping.`);
+            continue;
+        }
+
+        const local_marker_thresh = (min_intensity + max_intensity) / 2.0;
+        window.logToScreen(`verifyAndFilterMarkers_jsfeat: Candidate ${i}: min_cell_intensity=${min_intensity.toFixed(2)}, max_cell_intensity=${max_intensity.toFixed(2)}, local_marker_thresh=${local_marker_thresh.toFixed(2)}`);
+
+        // Now, derive the binary pattern using the local_marker_thresh
+        for (let r_pat = 0; r_pat < 3; r_pat++) {
+            for (let c_pat = 0; c_pat < 3; c_pat++) {
+                derived_binary_pattern[r_pat][c_pat] = (sampled_pattern_intensity[r_pat][c_pat] <= local_marker_thresh) ? 'black' : 'white';
+            }
+        }
+
+        window.logToScreen(`verifyAndFilterMarkers_jsfeat: Candidate ${i}: Derived pattern (local thresh): ${JSON.stringify(derived_binary_pattern)}`);
         window.logToScreen(`verifyAndFilterMarkers_jsfeat: Candidate ${i}: Expected pattern: ${JSON.stringify(marker_pattern_definition)}`);
 
         // Compare derived_binary_pattern with marker_pattern_definition
