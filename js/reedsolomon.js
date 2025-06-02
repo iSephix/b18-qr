@@ -178,13 +178,28 @@ class ReedSolomonDecoderGF19 {
      * @returns {Array<Number>} Coefficients of Omega(x).
      */
     calculateErrorEvaluatorPolynomialOmega(syndromesPolyS, sigma) {
-        if (this.DEBUG) console.log(`RS Decode LOG: Omega Calc: input S(x)_coeffs: [${syndromesPolyS.join(',')}], sigma(x)_coeffs: [${sigma.join(',')}]`);
-        const product = PolynomialGF19.multiply(syndromesPolyS, sigma);
-        let omega = product.slice(0, this.numParitySymbols);
-        omega = PolynomialGF19.normalize(omega);
-        if (this.DEBUG) console.log(`RS Decode LOG: Omega Calc: S*sigma product: [${product.join(',')}], Omega(x) (mod x^d): [${omega.join(',')}]`);
-        return omega;
+    if (this.DEBUG) console.log(`RS Decode LOG: Omega Calc: input S(x)_coeffs: [${syndromesPolyS.join(',')}], sigma(x)_coeffs: [${sigma.join(',')}]`);
+    const product = PolynomialGF19.multiply(syndromesPolyS, sigma);
+
+    // Omega(x) is (S(x) * sigma(x)) mod x^d.
+    // product.slice(0, this.numParitySymbols) correctly takes the coefficients
+    // corresponding to powers x^0 through x^(d-1).
+    let omega_coeffs_mod_xd = product.slice(0, this.numParitySymbols);
+
+    // Ensure omega always has exactly 'numParitySymbols' coefficients, padding with zeros if necessary.
+    // This is important if the product S(x)sigma(x) has a degree less than d-1,
+    // or if slice itself returns fewer than numParitySymbols elements (e.g. if product is short).
+    let final_omega_coeffs = new Array(this.numParitySymbols).fill(0);
+    for (let i = 0; i < omega_coeffs_mod_xd.length; i++) {
+        // Defensive check, slice should ensure this, but good to be safe.
+        if (i < this.numParitySymbols) {
+             final_omega_coeffs[i] = omega_coeffs_mod_xd[i];
+        }
     }
+
+    if (this.DEBUG) console.log(`RS Decode LOG: Omega Calc: S*sigma product: [${product.join(',')}], Omega(x) (mod x^d): [${final_omega_coeffs.join(',')}]`);
+    return final_omega_coeffs;
+}
 
     /**
      * Calculates error magnitudes using Forney's algorithm: e_j = -Omega(X_j_inv) / sigma'(X_j_inv), where X_j_inv is a root of sigma.
@@ -356,6 +371,17 @@ function testReedSolomon() {
     // Enable DEBUG for the specific 2-error case
     console.log("\nRS Test: Decoding 2-error case with DEBUG enabled:");
     rsDecoder.DEBUG = true;
+    // Ensure GF19 context is available for this log
+    if (typeof GF19 !== 'undefined' && typeof GF19.add !== 'undefined') {
+        const R_corrupt_for_S0_debug = [6,2,3,4,5,9,7,8,9,10,11,12,13,14,12,15,15,5]; // As per original log
+        let manual_S0_for_R_corrupt_debug = 0;
+        for(let val_debug of R_corrupt_for_S0_debug) {
+            manual_S0_for_R_corrupt_debug = GF19.add(manual_S0_for_R_corrupt_debug, val_debug);
+        }
+        console.log("RS Test DEBUG: Manually calculated S0 for R_corrupt [6,2,...] is: " + manual_S0_for_R_corrupt_debug);
+    } else {
+        console.log("RS Test DEBUG: GF19 or GF19.add not available for manual S0 calculation in testReedSolomon.");
+    }
     const encodedWithError2 = [...encodedMessage];
     encodedWithError2[0] = GF19.add(encodedWithError2[0], 5);
     encodedWithError2[5] = GF19.add(encodedWithError2[5], 3);
