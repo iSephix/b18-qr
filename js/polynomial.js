@@ -256,11 +256,11 @@ function testPolynomialGF19() {
     checkPoly("divide_remainder3", divRes3.remainder, [1]); // Expected: 1
 
     const divRes4 = PolynomialGF19.divide([1,2,3,4,5], [1,2,3]); // (5x^4+4x^3+3x^2+2x+1)/(3x^2+2x+1)
-    // Expected Q_gf19 = 8x^2+15x+5 => [5,15,8]
-    // Expected R_gf19 = 13x+15 => [15,13]
-    // My manual trace from previous step: Q = 8x^2+15x+1 => [1,15,8], R = 4x => [0,4]
-    const divRes4_expected_Q_from_test = [5,15,8]; // This is what the test asserts
-    const divRes4_expected_R_from_test = [15,13]; // This is what the test asserts
+    // Expected Q_gf19 = 8x^2+15x+5 => [5,15,8] -- This comment is for the original (incorrect) expectation
+    // Expected R_gf19 = 13x+15 => [15,13] -- This comment is for the original (incorrect) expectation
+    // My manual trace (and correct standard division) results: Q = 8x^2+15x+1 => [1,15,8], R = 4x => [0,4]
+    const divRes4_expected_Q_from_test = [1,15,8]; // Corrected expected quotient
+    const divRes4_expected_R_from_test = [0,4]; // Corrected expected remainder
 
     // Based on my manual trace, the correct results for standard long division are:
     const divRes4_correct_Q = [1,15,8];
