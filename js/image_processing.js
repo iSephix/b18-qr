@@ -102,7 +102,7 @@ window.decodeVisualCodeFromImage = async function(imageElement) {
         ['black', 'black', 'black']
     ];
 
-    const verified_markers_raw = verifyAndFilterMarkers_jsfeat(marker_candidates, img_u8_smooth, markerPatternForVerification);
+    const verified_markers_raw = verifyAndFilterMarkers_jsfeat(marker_candidates, img_u8_smooth, markerPatternForVerification, otsu_thresh_val);
     window.logToScreen("JSFeat: Verified markers (pre-NMS): " + verified_markers_raw.length);
 
     const final_jsfeat_markers = nonMaxSuppression_jsfeat(verified_markers_raw, 0.3);
@@ -726,6 +726,116 @@ function findMarkerCandidates_jsfeat(binary_matrix) {
     // Sort by area, descending - largest are often better candidates or easier to verify first
     marker_candidates.sort((a,b) => b.area - a.area);
     return marker_candidates;
+}
+
+/**
+ * Verifies marker candidates against a predefined pattern.
+ * @param {Array<Object>} marker_candidates - Objects from analyzeBlobs_jsfeat.
+ * @param {jsfeat.matrix_t} source_image - Grayscale source image (e.g., img_u8_smooth).
+ * @param {Array<Array<String>>} marker_pattern_definition - 2D array defining the expected pattern.
+ * @param {number} otsu_threshold_val - Pre-calculated Otsu threshold for the image.
+ * @returns {Array<Object>} Filtered list of verified marker objects.
+ */
+function verifyAndFilterMarkers_jsfeat(marker_candidates, source_image, marker_pattern_definition, otsu_threshold_val) {
+    // Function logic will be implemented here
+    window.logToScreen("verifyAndFilterMarkers_jsfeat: Function entry.");
+    window.logToScreen("verifyAndFilterMarkers_jsfeat: Received " + marker_candidates.length + " candidates.");
+
+    const verified_markers = [];
+
+    for (let i = 0; i < marker_candidates.length; i++) {
+        const candidate = marker_candidates[i];
+        window.logToScreen(`verifyAndFilterMarkers_jsfeat: Processing candidate ${i}: x=${candidate.x}, y=${candidate.y}, w=${candidate.width}, h=${candidate.height}`);
+
+        if (candidate.width < 3 || candidate.height < 3) {
+            window.logToScreen(`verifyAndFilterMarkers_jsfeat: Candidate ${i} too small, skipping.`);
+            continue;
+        }
+
+        const cell_width = candidate.width / 3.0;
+        const cell_height = candidate.height / 3.0;
+        const sampled_pattern_intensity = [[0,0,0],[0,0,0],[0,0,0]];
+        const derived_binary_pattern = [['', '', ''], ['', '', ''], ['', '', '']];
+
+        let possible_marker = true;
+
+        for (let r = 0; r < 3; r++) { // Pattern rows
+            for (let c = 0; c < 3; c++) { // Pattern columns
+                const cell_x_start = Math.floor(candidate.x + c * cell_width);
+                const cell_y_start = Math.floor(candidate.y + r * cell_height);
+                const cell_x_end = Math.floor(candidate.x + (c + 1) * cell_width);
+                const cell_y_end = Math.floor(candidate.y + (r + 1) * cell_height);
+
+                let current_cell_width = cell_x_end - cell_x_start;
+                let current_cell_height = cell_y_end - cell_y_start;
+
+                if (current_cell_width <= 0 || current_cell_height <= 0) {
+                     window.logToScreen(`verifyAndFilterMarkers_jsfeat: Candidate ${i}, cell [${r}][${c}] has zero or negative dimension, skipping candidate.`);
+                     possible_marker = false;
+                     break;
+                }
+
+                let sum_intensity = 0;
+                let num_pixels = 0;
+
+                for (let y_px = cell_y_start; y_px < cell_y_end; y_px++) {
+                    for (let x_px = cell_x_start; x_px < cell_x_end; x_px++) {
+                        if (x_px >= 0 && x_px < source_image.cols && y_px >= 0 && y_px < source_image.rows) {
+                            const pixel_idx = y_px * source_image.cols + x_px;
+                            sum_intensity += source_image.data[pixel_idx];
+                            num_pixels++;
+                        }
+                    }
+                }
+
+                if (num_pixels === 0) {
+                    window.logToScreen(`verifyAndFilterMarkers_jsfeat: Candidate ${i}, cell [${r}][${c}] had no pixels in source image bounds, skipping candidate.`);
+                    possible_marker = false;
+                    break;
+                }
+
+                const avg_intensity = sum_intensity / num_pixels;
+                sampled_pattern_intensity[r][c] = avg_intensity;
+                window.logToScreen(`verifyAndFilterMarkers_jsfeat: Candidate ${i}, cell [${r}][${c}]: avg_intensity = ${avg_intensity.toFixed(2)}`);
+
+                // Convert to binary based on Otsu threshold
+                // if average intensity <= otsu_threshold_val map to 'white', else 'black'.
+                derived_binary_pattern[r][c] = (avg_intensity <= otsu_threshold_val) ? 'white' : 'black';
+            }
+            if (!possible_marker) break;
+        }
+
+        if (!possible_marker) {
+            window.logToScreen(`verifyAndFilterMarkers_jsfeat: Candidate ${i} skipped due to cell processing issues.`);
+            continue;
+        }
+
+        window.logToScreen(`verifyAndFilterMarkers_jsfeat: Candidate ${i}: Derived pattern: ${JSON.stringify(derived_binary_pattern)}`);
+        window.logToScreen(`verifyAndFilterMarkers_jsfeat: Candidate ${i}: Expected pattern: ${JSON.stringify(marker_pattern_definition)}`);
+
+        // Compare derived_binary_pattern with marker_pattern_definition
+        let match = true;
+        for (let r = 0; r < 3; r++) {
+            for (let c = 0; c < 3; c++) {
+                if (derived_binary_pattern[r][c] !== marker_pattern_definition[r][c]) {
+                    match = false;
+                    break;
+                }
+            }
+            if (!match) break;
+        }
+
+        if (match) {
+            window.logToScreen(`verifyAndFilterMarkers_jsfeat: Candidate ${i} MATCHED! Adding to verified list.`);
+            verified_markers.push(candidate);
+        } else {
+            window.logToScreen(`verifyAndFilterMarkers_jsfeat: Candidate ${i} did NOT match.`);
+        }
+    }
+
+    window.logToScreen("verifyAndFilterMarkers_jsfeat: Found " + verified_markers.length + " verified markers.");
+    window.logToScreen("verifyAndFilterMarkers_jsfeat: Function exit.");
+    return verified_markers;
 }
 
 
