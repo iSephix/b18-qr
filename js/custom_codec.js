@@ -2,10 +2,10 @@
 
 // Constants for encoding/drawing
 const CUST_CODEC_COLOR_RGB_MAP = {
-    'black': { r: 0, g: 0, b: 0, style: 'rgb(0,0,0)' },  'white': { r: 255, g: 0, b: 255, style: 'rgb(255,0,255)' }, // Magenta for 'white' symbols
+    'black': { r: 0, g: 0, b: 0, style: 'rgb(0,0,0)' },  'white': { r: 255, g: 255, b: 255, style: 'rgb(255,255,255)' }, // Magenta for 'white' symbols - changed to white again no more magenta
     'blue': { r: 0, g: 0, b: 255, style: 'rgb(0,0,255)' }, 'green': { r: 0, g: 255, b: 0, style: 'rgb(0,255,0)' },
     'yellow': { r: 255, g: 255, b: 0, style: 'rgb(255,255,0)' }, 'red': { r: 255, g: 0, b: 0, style: 'rgb(255,0,0)' },
-    'gray': { r: 128, g: 128, b: 128, style: 'rgb(128,128,128)' }, 'background': { r: 255, g: 255, b: 255, style: 'rgb(255,255,255)' }
+    'gray': { r: 128, g: 128, b: 128, style: 'rgb(128,128,128)' }, 'background': { r: 255, g: 0, b: 255, style: 'rgb(255,0,255)' } // changed background white to magenta.
 };
 const CUST_CODEC_SHAPES = ['square', 'circle', 'triangle'];
 const CUST_CODEC_COLORS = ['black', 'white', 'blue', 'green', 'yellow', 'red'];
