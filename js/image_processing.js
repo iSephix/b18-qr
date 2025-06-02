@@ -87,22 +87,78 @@ function findMarkerCandidates_color(imageData, target_marker_color_rgb, color_ma
 
     window.logToScreen(`findMarkerCandidates_color: DIAGNOSTIC MODE - Using relaxed filters: min_area=${min_area}, max_area=${max_area.toFixed(0)}, min_aspect=${min_aspect_ratio}, max_aspect=${max_aspect_ratio}`);
 
-    const marker_candidates = raw_blobs.filter(blob => {
+    const marker_candidates_intermediate = raw_blobs.filter(blob => {
         const aspect_ratio = blob.width / blob.height;
         const condition = blob.area >= min_area &&
                blob.area <= max_area &&
                aspect_ratio >= min_aspect_ratio &&
                aspect_ratio <= max_aspect_ratio;
         if (!condition && blob.area >= min_area / 2) { // Log near misses for tuning
-            window.logToScreen(`findMarkerCandidates_color: Blob ${blob.label} filtered out: area=${blob.area}, asp=${aspect_ratio.toFixed(2)}`);
+            window.logToScreen(`findMarkerCandidates_color: Blob ${blob.label} filtered out by initial geometric filters: area=${blob.area}, asp=${aspect_ratio.toFixed(2)}`);
         }
         return condition;
     });
 
-    // Sort by area, descending
-    marker_candidates.sort((a, b) => b.area - a.area);
-    window.logToScreen("findMarkerCandidates_color: Filtered down to " + marker_candidates.length + " candidates. Processing finished.");
-    return marker_candidates;
+    window.logToScreen(`findMarkerCandidates_color: Found ${marker_candidates_intermediate.length} candidates after initial geometric filters. Now checking for non-black centers.`);
+    const final_marker_candidates = [];
+
+    for (const blob of marker_candidates_intermediate) {
+        // Define a small region in the center of the blob
+        const center_region_width = Math.floor(blob.width / 3);
+        const center_region_height = Math.floor(blob.height / 3);
+
+        if (center_region_width < 1 || center_region_height < 1) {
+            window.logToScreen(`findMarkerCandidates_color: Blob ${blob.label} too small for center check (w:${blob.width},h:${blob.height}), discarding.`);
+            continue;
+        }
+
+        const center_x_start = blob.x + Math.floor(blob.width / 3);
+        const center_y_start = blob.y + Math.floor(blob.height / 3);
+        const center_x_end = center_x_start + center_region_width;
+        const center_y_end = center_y_start + center_region_height;
+        
+        let sum_r = 0, sum_g = 0, sum_b = 0;
+        let num_pixels_in_center = 0;
+
+        for (let y_px = center_y_start; y_px < center_y_end; y_px++) {
+            for (let x_px = center_x_start; x_px < center_x_end; x_px++) {
+                if (x_px >= 0 && x_px < imageData.width && y_px >= 0 && y_px < imageData.height) {
+                    const pixel_idx_start = (y_px * imageData.width + x_px) * 4;
+                    sum_r += imageData.data[pixel_idx_start];
+                    sum_g += imageData.data[pixel_idx_start + 1];
+                    sum_b += imageData.data[pixel_idx_start + 2];
+                    num_pixels_in_center++;
+                }
+            }
+        }
+
+        if (num_pixels_in_center === 0) {
+            window.logToScreen(`findMarkerCandidates_color: Blob ${blob.label} center region had no pixels, discarding.`);
+            continue;
+        }
+
+        const avg_center_color = {
+            r: sum_r / num_pixels_in_center,
+            g: sum_g / num_pixels_in_center,
+            b: sum_b / num_pixels_in_center
+        };
+
+        const center_dist_to_black = calculateColorDistance(avg_center_color, target_marker_color_rgb); // target_marker_color_rgb is EXPECTED_MARKER_BLACK_RGB
+
+        const solid_black_center_threshold = color_match_threshold / 3.0; 
+
+        if (center_dist_to_black < solid_black_center_threshold) {
+            window.logToScreen(`findMarkerCandidates_color: Blob ${blob.label} (w:${blob.width},h:${blob.height}) discarded. Center is too black (dist: ${center_dist_to_black.toFixed(0)}, avgRGB:(${avg_center_color.r.toFixed(0)},${avg_center_color.g.toFixed(0)},${avg_center_color.b.toFixed(0)})).`);
+        } else {
+            window.logToScreen(`findMarkerCandidates_color: Blob ${blob.label} (w:${blob.width},h:${blob.height}) KEPT. Center not too black (dist: ${center_dist_to_black.toFixed(0)}, avgRGB:(${avg_center_color.r.toFixed(0)},${avg_center_color.g.toFixed(0)},${avg_center_color.b.toFixed(0)})).`);
+            final_marker_candidates.push(blob);
+        }
+    }
+
+    // Sort the final candidates by area
+    final_marker_candidates.sort((a, b) => b.area - a.area);
+    window.logToScreen("findMarkerCandidates_color: Filtered (center check) down to " + final_marker_candidates.length + " candidates. Processing finished.");
+    return final_marker_candidates;
 }
 
 /**
@@ -166,7 +222,7 @@ function verifyAndFilterMarkers_color(
                 const sample_y_start = Math.floor(base_cell_y_start + inset_h_px);
                 const sample_x_end = Math.floor(base_cell_x_end - inset_w_px);
                 const sample_y_end = Math.floor(base_cell_y_end - inset_h_px);
-
+                
                 window.logToScreen(`verifyAndFilterMarkers_color: Cand ${i} Cell[${r_cell}][${c_cell}] Base X:${base_cell_x_start.toFixed(1)}-${base_cell_x_end.toFixed(1)}, Y:${base_cell_y_start.toFixed(1)}-${base_cell_y_end.toFixed(1)}. Sample X:${sample_x_start}-${sample_x_end}, Y:${sample_y_start}-${sample_y_end}`);
 
 
@@ -1029,7 +1085,7 @@ function verifyAndFilterMarkers_jsfeat(marker_candidates, source_image, marker_p
                 let sample_y_start = cell_y_start + inset_h;
                 let sample_x_end = cell_x_end - inset_w;
                 let sample_y_end = cell_y_end - inset_h;
-
+                
                 // Log sampling bounds
                 window.logToScreen(`verifyAndFilterMarkers_jsfeat: Candidate ${i}, cell [${r}][${c}]: sampling original bounds x:${cell_x_start}-${cell_x_end}, y:${cell_y_start}-${cell_y_end}. Insets: w=${inset_w},h=${inset_h}. Sample area x:${sample_x_start}-${sample_x_end}, y:${sample_y_start}-${sample_y_end}`);
 
@@ -1041,7 +1097,7 @@ function verifyAndFilterMarkers_jsfeat(marker_candidates, source_image, marker_p
                     sample_x_end = cell_x_end;
                     sample_y_end = cell_y_end;
                 }
-
+                
                 let sum_intensity = 0;
                 let num_pixels = 0;
 
@@ -1089,7 +1145,7 @@ function verifyAndFilterMarkers_jsfeat(marker_candidates, source_image, marker_p
 
         const min_intensity = Math.min(...cell_intensities);
         const max_intensity = Math.max(...cell_intensities);
-
+        
         // Check if min and max are substantially different. If not, it's likely not a valid marker.
         // A very small difference might also lead to an unstable threshold.
         if (max_intensity - min_intensity < 10) { // Threshold can be tuned, e.g. 10 gray levels
