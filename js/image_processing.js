@@ -2,9 +2,9 @@
 
 // Constants (defined in previous steps)
 const colorRgbMapJs = {
-    'black': { r: 0, g: 0, b: 0 }, 'white': { r: 255, g: 0, b: 255 }, 'blue': { r: 0, g: 0, b: 255 },
+    'black': { r: 0, g: 0, b: 0 }, 'white': { r: 255, g: 255, b: 255 }, 'blue': { r: 0, g: 0, b: 255 },
     'green': { r: 0, g: 255, b: 0 }, 'yellow': { r: 255, g: 255, b: 0 }, 'red': { r: 255, g: 0, b: 0 },
-    'gray': { r: 128, g: 128, b: 128 }, 'background': { r: 255, g: 255, b: 255 }
+    'gray': { r: 128, g: 128, b: 128 }, 'background': { r: 255, g: 0, b: 255 }
 };
 const shapesJs = ['square', 'circle', 'triangle'];
 const colorsJs = ['black', 'white', 'blue', 'green', 'yellow', 'red'];
