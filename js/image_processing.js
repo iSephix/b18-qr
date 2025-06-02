@@ -1719,11 +1719,11 @@ function findMarkersFromCells(allCells, markerCellPattern, avgCellWidth, avgCell
                 foundMarkers.push({
                     x: markerX, y: markerY, width: markerWidth, height: markerHeight,
                     area: markerWidth * markerHeight,
-                    points: [ // TL, TR, BR, BL of the marker bounding box
-                        { x: markerX, y: markerY },
-                        { x: markerX + markerWidth, y: markerY },
-                        { x: markerX + markerWidth, y: markerY + markerHeight },
-                        { x: markerX, y: markerY + markerHeight }
+                    points: [ // TL, TR, BR, BL of the marker bounding box (inclusive coordinates)
+                        { x: markerX, y: markerY },                                     // Top-left
+                        { x: markerX + markerWidth - 1, y: markerY },                   // Top-right
+                        { x: markerX + markerWidth - 1, y: markerY + markerHeight - 1 }, // Bottom-right
+                        { x: markerX, y: markerY + markerHeight - 1 }                   // Bottom-left
                     ],
                     // Optional: store the constituent cells for debugging
                     // constituentCells: currentMarkerCells.flat().filter(Boolean) 
