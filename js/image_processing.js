@@ -80,10 +80,12 @@ function findMarkerCandidates_color(imageData, target_marker_color_rgb, color_ma
 
     // Apply similar filtering as in the old findMarkerCandidates_jsfeat (area, aspect ratio)
     // These might need tuning for color-based candidates.
-    const min_area = 30; // Minimum area for a candidate blob
-    const max_area = (width * height) / 9; // Max 1/9th of image area
-    const min_aspect_ratio = 0.3; // Adjusted for potentially less regular shapes from color
-    const max_aspect_ratio = 3.0; // Adjusted
+    const min_area = 5; // Temporarily very low for diagnostics
+    const max_area = (width * height) / 4; // Temporarily larger for diagnostics (1/4 of image area)
+    const min_aspect_ratio = 0.1; // Temporarily very permissive
+    const max_aspect_ratio = 10.0; // Temporarily very permissive
+
+    window.logToScreen(`findMarkerCandidates_color: DIAGNOSTIC MODE - Using relaxed filters: min_area=${min_area}, max_area=${max_area.toFixed(0)}, min_aspect=${min_aspect_ratio}, max_aspect=${max_aspect_ratio}`);
 
     const marker_candidates = raw_blobs.filter(blob => {
         const aspect_ratio = blob.width / blob.height;
