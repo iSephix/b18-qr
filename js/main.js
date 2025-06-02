@@ -47,6 +47,9 @@ async function runAllTests() {
 
         if (typeof testCustomCodec === 'function') { console.info("Running CustomCodec tests..."); if(!await testCustomCodec()) allPass = false; }
         else { console.error("testCustomCodec not defined."); allPass = false; }
+
+        if (typeof testImageProcessingLogic === 'function') { console.info("Running ImageProcessingLogic tests..."); if(!testImageProcessingLogic()) allPass = false; }
+        else { console.error("testImageProcessingLogic not defined."); allPass = false; }
     } catch (e) {
         console.error("Error during test execution:", e.stack || e);
         allPass = false;
