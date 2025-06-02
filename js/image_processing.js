@@ -16,7 +16,7 @@ const EXPECTED_MARKER_WHITE_RGB = { r: 255, g: 255, b: 255 };
 // for a color to be considered 'close enough' to a target color.
 // E.g., if target is black (0,0,0), a pixel (10,20,30) has distance 10+20+30=60.
 // If COLOR_DISTANCE_THRESHOLD_MARKER is 150, this pixel would be considered 'black-ish'.
-const COLOR_DISTANCE_THRESHOLD_MARKER = 250; // Tune this value as needed
+const COLOR_DISTANCE_THRESHOLD_MARKER = 65; // Tune this value as needed
 
 /**
  * Calculates the Manhattan distance between two RGB colors.
