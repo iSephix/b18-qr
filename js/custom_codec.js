@@ -456,4 +456,71 @@ async function generateFullEncodedQrOnCanvas(textToEncode, canvasElement, downlo
 }
 
 // Test function (from previous step)
-async function testCustomCodec() { console.log("--- Custom Codec (Data Conversion) Tests ---"); let pass = true; const checkCodec = (desc, actual, expected) => { const success = JSON.stringify(actual) === JSON.stringify(expected); console.log(`Codec Test: ${desc} - Expected: ${expected}, Got: ${actual}. ${success ? 'PASS' : 'FAIL'}`); if (!success) pass = false; }; const checkAsyncCodec = async (desc, actualPromise, expected) => { const actual = await actualPromise; const success = JSON.stringify(actual) === JSON.stringify(expected); console.log(`Codec Async Test: ${desc} - Expected: ${expected}, Got: ${actual}. ${success ? 'PASS' : 'FAIL'}`); if (!success) pass = false; }; const testStr1 = "Hello"; const byteList1 = await textToByteListJs(testStr1); await checkAsyncCodec("textToByteList (Hello)", byteList1, [72,101,108,108,111]); const str1Re = await byteListToStringJs(byteList1); await checkAsyncCodec("byteListToString (Hello)", str1Re, testStr1); const testByteList2 = [0, 17, 18, 323, 75]; const symIndices2 = byteListToSymbolIndicesJs(testByteList2); checkCodec("byteListToSymbolIndices", symIndices2, [0,0, 0,17, 1,0, 17,17, 4,3]); const byteList2Re = symbolIndicesToByteListJs(symIndices2); checkCodec("symbolIndicesToByteList", byteList2Re, testByteList2); const aesKey = "testkey12345678"; const aesPlain = "SecretData"; const aesPlainBytes = new TextEncoder().encode(aesPlain); const aesCipherBytesArray = await aesEncryptJs(aesPlainBytes, aesKey); const aesDecryptedUint8Array = await aesDecryptJs(aesCipherBytesArray, aesKey); const aesDecryptedStr = new TextDecoder().decode(aesDecryptedUint8Array); checkCodec("AES Decrypt(Encrypt(SecretData))", aesDecryptedStr, aesPlain); const encTestStr = "<encrypt_method>AES</encrypt_method><encrypt_key>" + aesKey + "</encrypt_key><encrypt>" + aesPlain + "</encrypt>Trailer"; const encByteList = await textToByteListJs(encTestStr); const decStrFromEnc = await byteListToStringJs(encByteList); const expectedDecStr = "<encrypt_method>AES</encrypt_method><encrypt_key>" + aesKey + "</encrypt_key>" + aesPlain + "Trailer"; checkCodec("text -> bytes -> string (with AES)", decStrFromEnc, expectedDecStr); const messageSymsForPipeline = byteListToSymbolIndicesJs([72,101,108,108,111]); const pipelineTestBytes = symbolIndicesToByteListJs(messageSymsForPipeline); const pipelineTestString = await byteListToStringJs(pipelineTestBytes); checkCodec("Manual pipeline: syms->bytes->string (Hello)", pipelineTestString, "Hello"); console.log(`CustomCodec All Tests Result: ${pass ? 'PASS' : 'FAIL'}`); return pass;}
+async function testCustomCodec() {
+    console.log("--- Custom Codec (Data Conversion) Tests ---");
+    let pass = true;
+    const checkCodec = (desc, actual, expected) => {
+        const success = JSON.stringify(actual) === JSON.stringify(expected);
+        console.log(`Codec Test: ${desc} - Expected: ${JSON.stringify(expected)}, Got: ${JSON.stringify(actual)}. ${success ? 'PASS' : 'FAIL'}`);
+        if (!success) pass = false;
+    };
+    const checkAsyncCodec = async (desc, actualPromise, expected) => {
+        const actual = await actualPromise;
+        const success = JSON.stringify(actual) === JSON.stringify(expected);
+        console.log(`Codec Async Test: ${desc} - Expected: ${JSON.stringify(expected)}, Got: ${JSON.stringify(actual)}. ${success ? 'PASS' : 'FAIL'}`);
+        if (!success) pass = false;
+    };
+
+    const testStr1 = "Hello";
+    const byteList1 = await textToByteListJs(testStr1);
+    await checkAsyncCodec("textToByteList (Hello)", byteList1, [72,101,108,108,111]);
+    const str1Re = await byteListToStringJs(byteList1);
+    await checkAsyncCodec("byteListToString (Hello)", str1Re, testStr1);
+
+    const testByteList2 = [0, 17, 18, 323, 75];
+    const symIndices2 = byteListToSymbolIndicesJs(testByteList2);
+    checkCodec("byteListToSymbolIndices", symIndices2, [0,0, 0,17, 1,0, 17,17, 4,3]);
+    const byteList2Re = symbolIndicesToByteListJs(symIndices2);
+    checkCodec("symbolIndicesToByteList", byteList2Re, testByteList2);
+
+    const aesKey = "testkey12345678";
+    const aesPlain = "SecretData";
+    const aesPlainBytes = new TextEncoder().encode(aesPlain);
+    const aesCipherBytesArray = await aesEncryptJs(aesPlainBytes, aesKey);
+    const aesDecryptedUint8Array = await aesDecryptJs(aesCipherBytesArray, aesKey);
+    const aesDecryptedStr = new TextDecoder().decode(aesDecryptedUint8Array);
+    checkCodec("AES Decrypt(Encrypt(SecretData))", aesDecryptedStr, aesPlain);
+
+    const encTestStr = "<encrypt_method>AES</encrypt_method><encrypt_key>" + aesKey + "</encrypt_key><encrypt>" + aesPlain + "</encrypt>Trailer";
+    const encByteList = await textToByteListJs(encTestStr);
+    const decStrFromEnc = await byteListToStringJs(encByteList);
+    const expectedDecStr = "<encrypt_method>AES</encrypt_method><encrypt_key>" + aesKey + "</encrypt_key>" + aesPlain + "Trailer"; // AES content is plain text here as byteListToStringJs handles decryption
+    checkCodec("text -> bytes -> string (with AES)", decStrFromEnc, expectedDecStr);
+
+    const messageSymsForPipeline = byteListToSymbolIndicesJs([72,101,108,108,111]); // "Hello"
+    const pipelineTestBytes = symbolIndicesToByteListJs(messageSymsForPipeline);
+    const pipelineTestString = await byteListToStringJs(pipelineTestBytes);
+    checkCodec("Manual pipeline: syms->bytes->string (Hello)", pipelineTestString, "Hello");
+
+    // New test case for combined tags
+    const comboStr = "Data: <linear>3x-6=0</linear> and <base64>SEVMTE8=</base64> then normal text.";
+    const expectedComboStr = "Data: <linear>3x-6=0</linear> and HELLO then normal text."; // Assuming base64 is decoded
+    const comboByteList = await textToByteListJs(comboStr);
+    // Expected byte list for comboStr (manual calculation for verification, not for checkCodec directly)
+    // "Data: " -> [68, 97, 116, 97, 58, 32]
+    // "<linear>" -> [257]
+    // "3x-6=0" -> [51, 120, 45, 54, 61, 48]
+    // "</linear>" -> [258]
+    // " and " -> [32, 97, 110, 100, 32]
+    // "<base64>" -> [281]
+    // "SEVMTE8=" -> [83, 69, 86, 77, 84, 69, 56, 61]
+    // "</base64>" -> [282]
+    // " then normal text." -> [32, 116, 104, 101, 110, 32, 110, 111, 114, 109, 97, 108, 32, 116, 101, 120, 116, 46]
+    // This can be used to verify textToByteListJs if needed, but the end-to-end string check is the main goal.
+    const comboStrRe = await byteListToStringJs(comboByteList);
+    await checkAsyncCodec("textToByteListToString (Combined Tags)", comboStrRe, expectedComboStr);
+
+
+    console.log(`CustomCodec All Tests Result: ${pass ? 'PASS' : 'FAIL'}`);
+    return pass;
+}

@@ -80,12 +80,13 @@ function findMarkerCandidates_color(imageData, target_marker_color_rgb, color_ma
 
     // Apply similar filtering as in the old findMarkerCandidates_jsfeat (area, aspect ratio)
     // These might need tuning for color-based candidates.
-    const min_area = 5; // Temporarily very low for diagnostics
-    const max_area = (width * height) / 4; // Temporarily larger for diagnostics (1/4 of image area)
-    const min_aspect_ratio = 0.1; // Temporarily very permissive
-    const max_aspect_ratio = 10.0; // Temporarily very permissive
+    const min_area = 15; // Changed from 5
+    const max_area = (width * height) / 4; // Temporarily larger for diagnostics (1/4 of image area) - Kept as is
+    const min_aspect_ratio = 0.3; // Changed from 0.1
+    const max_aspect_ratio = 3.0; // Changed from 10.0
 
-    window.logToScreen(`findMarkerCandidates_color: DIAGNOSTIC MODE - Using relaxed filters: min_area=${min_area}, max_area=${max_area.toFixed(0)}, min_aspect=${min_aspect_ratio}, max_aspect=${max_aspect_ratio}`);
+    // Log the new filter parameters
+    window.logToScreen(`findMarkerCandidates_color: Using filter params - min_area=${min_area}, max_area=${max_area.toFixed(0)}, min_aspect=${min_aspect_ratio.toFixed(1)}, max_aspect=${max_aspect_ratio.toFixed(1)}`);
 
     const marker_candidates_intermediate = raw_blobs.filter(blob => {
         const aspect_ratio = blob.width / blob.height;
@@ -469,6 +470,32 @@ window.decodeVisualCodeFromImage = async function(imageElement) {
             }
             window.logToScreen("JSFeat: Global perspective warp complete.");
 
+            // Debug Canvas Drawing for warped_img_jsfeat
+            if (window.enableDebugCanvasDrawing) {
+                const debugCanvas = document.getElementById('debugCanvas'); // Assuming 'debugCanvas' is the ID
+                if (debugCanvas && warped_img_jsfeat && warped_img_jsfeat.data.length > 0) {
+                    debugCanvas.width = warped_img_jsfeat.cols;
+                    debugCanvas.height = warped_img_jsfeat.rows;
+                    const ctxDebug = debugCanvas.getContext('2d');
+                    const warpedImageData = ctxDebug.createImageData(warped_img_jsfeat.cols, warped_img_jsfeat.rows);
+                    
+                    // Convert U8_C1 grayscale to RGBA for canvas display
+                    const data_u32 = new Uint32Array(warpedImageData.data.buffer);
+                    const alpha = 0xFF << 24; // 255 alpha
+                    for (let i = 0; i < warped_img_jsfeat.data.length; i++) {
+                        const gray_val = warped_img_jsfeat.data[i];
+                        data_u32[i] = alpha | (gray_val << 16) | (gray_val << 8) | gray_val;
+                    }
+                    
+                    ctxDebug.putImageData(warpedImageData, 0, 0);
+                    debugCanvas.style.display = 'block';
+                    window.logToScreen("JSFeat: Warped image drawn to debugCanvas.");
+                } else {
+                    if (!debugCanvas) window.logToScreen("JSFeat WARN: Debug canvas element not found.");
+                    if (!warped_img_jsfeat || warped_img_jsfeat.data.length === 0) window.logToScreen("JSFeat WARN: Warped image for debug canvas is invalid or empty.");
+                }
+            }
+
             if (!warped_img_jsfeat || warped_img_jsfeat.rows === 0 || warped_img_jsfeat.cols === 0) {
                 window.logToScreen("JSFeat ERROR: Warped image is invalid.");
                 updateDecodeResultUI('Error: Failed to create a usable rectified image (JSFeat).');
@@ -547,6 +574,10 @@ window.decodeVisualCodeFromImage = async function(imageElement) {
                             symbolIndex = CUST_CODEC_SYMBOL_LIST.length;
                         }
                         currentSymbolsFlatIndices.push(symbolIndex);
+
+                        if (window.detailedSymbolLogging) {
+                            console.log(`decodeVisualCodeFromImage: Grid Loop - rCell=${rCell}, cCell=${cCell}, Symbol: ${identifiedSymbol[0]}/${identifiedSymbol[1]}, Index: ${symbolIndex}`);
+                        }
                     }
                 }
 
@@ -556,13 +587,18 @@ window.decodeVisualCodeFromImage = async function(imageElement) {
                 }
 
                 if (typeof fullDecodePipelineFromIndices === 'function') {
+                    // Log gridDim and currentSymbolsFlatIndices.length before calling fullDecodePipelineFromIndices
+                    console.log(`decodeVisualCodeFromImage: Before fullDecodePipelineFromIndices - gridDim=${gridDim}, currentSymbolsFlatIndices.length=${currentSymbolsFlatIndices.length}`);
+                    
                     const resultString = await fullDecodePipelineFromIndices(currentSymbolsFlatIndices);
                     if (resultString !== null && resultString !== undefined) {
                         decodedString = resultString;
                         console.info(`JSFeat Path: Successfully decoded with grid ${gridDim}x${gridDim}!`);
                         break;
                     } else {
-                        console.warn(`JSFeat Path: Grid ${gridDim} decode attempt failed (pipeline returned null).`);
+                        // Use logToScreen for better UI visibility as requested
+                        const message = `JSFeat Path: Grid ${gridDim}x${gridDim} decode attempt failed (pipeline returned null).`;
+                        window.logToScreen(message);
                     }
                 } else {
                     console.error('fullDecodePipelineFromIndices function is not available. JSFeat path cannot complete decoding.');
@@ -636,8 +672,17 @@ function precalculateColorLuminances(color_map) {
  * @param {Array} special_symbol - e.g., CUST_CODEC_SPECIAL_SYMBOL.
  * @returns {Array<String>} An array containing [colorName, shapeName].
  */
-function identifySymbol_jsfeat(cell_matrix, color_map, symbol_list, special_symbol) {
+function identifySymbol_jsfeat(cell_matrix, color_map, symbol_list, special_symbol, rCell = -1, cCell = -1, gridDim = -1) { // Added rCell, cCell, gridDim for logging
+    if (window.detailedSymbolLogging) {
+        const cellHeight = cell_matrix ? cell_matrix.rows : 'N/A';
+        const cellWidth = cell_matrix ? cell_matrix.cols : 'N/A';
+        console.log(`identifySymbol_jsfeat: Input cell_matrix dimensions: ${cellWidth}x${cellHeight} at approx. [${rCell},${cCell}] of ${gridDim}x${gridDim}`);
+    }
+
     if (!cell_matrix || cell_matrix.rows === 0 || cell_matrix.cols === 0 || !cell_matrix.data || cell_matrix.data.length === 0) {
+        if (window.detailedSymbolLogging) {
+            console.log(`identifySymbol_jsfeat: Empty or invalid cell_matrix at approx. [${rCell},${cCell}]. Returning special_symbol.`);
+        }
         return [...special_symbol];
     }
 
@@ -681,6 +726,9 @@ function identifySymbol_jsfeat(cell_matrix, color_map, symbol_list, special_symb
     if (min_lum_diff <= 50) {
         detectedColorName = bestMatchColor;
     } else {
+        if (window.detailedSymbolLogging) {
+            console.log(`identifySymbol_jsfeat: Color mismatch at approx. [${rCell},${cCell}]. avg_cell_intensity=${avg_cell_intensity.toFixed(2)}, bestMatchColor=${bestMatchColor}, min_lum_diff=${min_lum_diff.toFixed(2)}. Returning special_symbol.`);
+        }
         return [...current_special_symbol];
     }
     // If the best match is 'gray' from the color map (and it's a valid symbol color), it's fine.
@@ -725,24 +773,35 @@ function identifySymbol_jsfeat(cell_matrix, color_map, symbol_list, special_symb
     const fill_ratio = symbol_area_in_cell / (bw * bh);
     const aspect_ratio = bw / bh;
 
-    // Square: aspect ratio near 1, high fill ratio
+    // Shape detection logic (existing)
+    let shape_heuristic_failed = false;
     if (aspect_ratio > 0.7 && aspect_ratio < 1.4 && fill_ratio > 0.7) {
         detectedShape = 'square';
-    }
-    // Circle: aspect ratio near 1, moderate fill ratio (pi/4 ~ 0.785, but allow wider range for imperfect circles)
-    else if (aspect_ratio > 0.65 && aspect_ratio < 1.5 && fill_ratio > 0.5 && fill_ratio < 0.85) {
-         detectedShape = 'circle';
-    }
-    // Triangle: More varied aspect ratios, typically lower fill ratio than squares/circles
-    // This is the hardest to distinguish with simple bounding box metrics.
-    else if (fill_ratio > 0.3 && fill_ratio < 0.7) {
-        // Could try to distinguish from elongated rectangles if needed, but this is very basic
+    } else if (aspect_ratio > 0.65 && aspect_ratio < 1.5 && fill_ratio > 0.5 && fill_ratio < 0.85) {
+        detectedShape = 'circle';
+    } else if (fill_ratio > 0.3 && fill_ratio < 0.7) {
         detectedShape = 'triangle';
+    } else {
+        // Default to square if heuristics are ambiguous, and log this case if detailed logging is on
+        detectedShape = 'square'; // Default shape
+        shape_heuristic_failed = true; // Mark that we fell into default
     }
-    // Default to square if heuristics are ambiguous
-    else {
-        detectedShape = 'square';
+
+    if (window.detailedSymbolLogging) {
+        if (shape_heuristic_failed) { // Log if shape detection was ambiguous or failed specific criteria
+             console.log(`identifySymbol_jsfeat: Shape ambiguity/default at approx. [${rCell},${cCell}]. cell_otsu_thresh=${cell_otsu_thresh}, fgPixels=${fgPixels}, symbol_area_in_cell=${symbol_area_in_cell}, bw=${bw}, bh=${bh}, fill_ratio=${fill_ratio.toFixed(2)}, aspect_ratio=${aspect_ratio.toFixed(2)}. Detected color: ${detectedColorName}, Defaulted shape: ${detectedShape}.`);
+        }
+        // Always log final detected symbol if detailed logging is on
+        console.log(`identifySymbol_jsfeat: Final detection at approx. [${rCell},${cCell}]: Color=${detectedColorName}, Shape=${detectedShape}`);
     }
+
+    // Before returning due to shape ambiguity or failure (original conditions)
+    // These conditions from original code imply returning a default shape with the detected color.
+    // The logging for this specific case is now handled by the shape_heuristic_failed flag above.
+    // Example: if (fgPixels / (binary_cell_matrix.data.length || 1) < 0.05) { ... log ... return [detectedColorName, 'square']; }
+    // This part might need more refinement if specific early exits for shape need distinct logging.
+    // For now, the final log covers the result.
+
     return [detectedColorName, detectedShape];
 }
 
@@ -1365,6 +1424,140 @@ function showSpinnerUI(spinnerId) {
     } else {
         console.warn("Spinner UI element not found:", spinnerId);
     }
+}
+
+// --- Image Processing Logic Tests ---
+function testImageProcessingLogic() {
+    console.log("--- Image Processing Logic Tests ---");
+    let overallPass = true;
+
+    // Helper to check generic conditions
+    const check = (desc, actual, expected) => {
+        // Using JSON.stringify for deep comparison of objects/arrays if needed
+        const success = JSON.stringify(actual) === JSON.stringify(expected);
+        console.log(`Test: ${desc} - Expected: ${JSON.stringify(expected)}, Got: ${JSON.stringify(actual)}. ${success ? 'PASS' : 'FAIL'}`);
+        if (!success) overallPass = false;
+        return success;
+    };
+
+    // --- Tests for calculateColorDistance ---
+    console.log("Testing calculateColorDistance...");
+    check("calculateColorDistance: black to white", calculateColorDistance({r:0,g:0,b:0}, {r:255,g:255,b:255}), 765);
+    check("calculateColorDistance: black to gray", calculateColorDistance({r:0,g:0,b:0}, {r:128,g:128,b:128}), 384);
+    check("calculateColorDistance: color to itself", calculateColorDistance({r:10,g:20,b:30}, {r:10,g:20,b:30}), 0);
+    check("calculateColorDistance: partial diff", calculateColorDistance({r:10,g:20,b:30}, {r:10,g:25,b:35}), 10);
+
+    // --- Tests for identifySymbol_jsfeat ---
+    console.log("Testing identifySymbol_jsfeat (mocked inputs)...");
+    const createMockCellMatrix = (width, height, fillValue) => {
+        const data = new Uint8Array(width * height);
+        if (typeof fillValue === 'number') {
+            data.fill(fillValue);
+        } else if (typeof fillValue === 'function') {
+            for(let r=0; r < height; r++) {
+                for(let c=0; c < width; c++) {
+                    data[r*width + c] = fillValue(r,c);
+                }
+            }
+        }
+        // Ensure jsfeat and its types are available or mock them minimally for the test environment
+        const U8_t = (typeof jsfeat !== 'undefined' && jsfeat.U8_t) ? jsfeat.U8_t : 0x01000000; // Example type
+        const C1_t = (typeof jsfeat !== 'undefined' && jsfeat.C1_t) ? jsfeat.C1_t : 0x00010000; // Example type
+
+        return { data: data, cols: width, rows: height, type: U8_t | C1_t };
+    };
+
+    // Mock CUST_CODEC constants if not available globally (e.g. if running tests standalone)
+    const mockColorMap = (typeof CUST_CODEC_COLOR_RGB_MAP !== 'undefined') ? CUST_CODEC_COLOR_RGB_MAP : {
+        'black': { r: 0, g: 0, b: 0 }, 'white': { r: 255, g: 255, b: 255 }, 'blue': { r: 0, g: 0, b: 255 },
+        'green': { r: 0, g: 255, b: 0 }, 'yellow': { r: 255, g: 255, b: 0 }, 'red': { r: 255, g: 0, b: 0 },
+        'gray': { r: 128, g: 128, b: 128 }, 'background': { r: 255, g: 0, b: 255 }
+    };
+    const mockSymbolList = (typeof CUST_CODEC_SYMBOL_LIST !== 'undefined') ? CUST_CODEC_SYMBOL_LIST : [
+        ['black','square'], ['white','square'], /* more needed for real tests */
+    ];
+    const mockSpecialSymbol = (typeof CUST_CODEC_SPECIAL_SYMBOL !== 'undefined') ? CUST_CODEC_SPECIAL_SYMBOL : ['gray', 'square'];
+
+    // Test Case 1: Solid Black Cell for identifySymbol_jsfeat
+    const blackCell = createMockCellMatrix(10, 10, 0); // Fill with 0 (black)
+    const symbolBlack = identifySymbol_jsfeat(blackCell, mockColorMap, mockSymbolList, mockSpecialSymbol, 0,0,10);
+    check("identifySymbol_jsfeat: Solid Black Cell", symbolBlack, ["black", "square"]);
+
+    // Test Case 2: Solid White Cell for identifySymbol_jsfeat
+    const whiteCell = createMockCellMatrix(10, 10, 255); // Fill with 255 (white)
+    const symbolWhite = identifySymbol_jsfeat(whiteCell, mockColorMap, mockSymbolList, mockSpecialSymbol, 0,0,10);
+    check("identifySymbol_jsfeat: Solid White Cell", symbolWhite, ["white", "square"]);
+    
+    // Test Case 3: Mostly Gray Cell (should default to special symbol due to min_lum_diff)
+    // Precalculate gray luminance: 0.299*128 + 0.587*128 + 0.114*128 = 128
+    // If we make a cell slightly off from any defined color, e.g., avg intensity 100.
+    // Closest might be black (lum 0, diff 100) or gray (lum 128, diff 28) if gray is in map for symbol ID.
+    // If gray is not in the symbol map's luminances, then black might be chosen but min_lum_diff > 50.
+    // Let's assume CUST_CODEC_COLOR_RGB_MAP is used, which has gray. Luminance of gray is ~128.
+    // If avg_cell_intensity is, say, 50. Closest is black (lum 0, diff 50). This passes threshold.
+    // If avg_cell_intensity is 10. Closest is black (lum 0, diff 10). Passes.
+    // If avg_cell_intensity is 100. Gray (128, diff 28), Black (0, diff 100). Gray is chosen.
+    // If avg_cell_intensity is 200. White (255, diff 55) -> special. Gray (128, diff 72) -> special. Yellow (225, diff 25) -> yellow.
+    const grayCell = createMockCellMatrix(10, 10, 128); // Fill with 128 (gray)
+    const symbolGray = identifySymbol_jsfeat(grayCell, mockColorMap, mockSymbolList, mockSpecialSymbol, 0,0,10);
+    check("identifySymbol_jsfeat: Solid Gray Cell", symbolGray, ["gray", "square"]); // Expects gray to be identified
+
+    // --- Tests for selectCornerMarkers_jsfeat ---
+    console.log("Testing selectCornerMarkers_jsfeat (mocked inputs)...");
+    const createMockMarker = (id, x, y, w, h) => ({
+        id: id, x: x, y: y, width: w, height: h, area: w * h,
+        points: [{x:x,y:y}, {x:x+w,y:y}, {x:x+w,y:y+h}, {x:x,y:y+h}] // TL, TR, BR, BL
+    });
+
+    // Test Case 1: Ideal scenario
+    const mockMarkersIdeal = [
+        createMockMarker("TL", 10, 10, 20, 20),  // TL
+        createMockMarker("TR", 100, 12, 20, 20), // TR (y slightly different is fine)
+        createMockMarker("BL", 12, 100, 20, 20)  // BL (x slightly different is fine)
+    ];
+    const cornersIdeal = selectCornerMarkers_jsfeat(mockMarkersIdeal, 200, 200);
+    let idealCornersPass = false;
+    if (cornersIdeal && 
+        cornersIdeal.TL_code_corner.x === 10 && cornersIdeal.TL_code_corner.y === 10 &&
+        cornersIdeal.TR_code_corner.x === 120 && cornersIdeal.TR_code_corner.y === 12 && // x+w for TR point
+        cornersIdeal.BL_code_corner.x === 12 && cornersIdeal.BL_code_corner.y === 120) { // x, y+h for BL point
+        idealCornersPass = true;
+    }
+    check("selectCornerMarkers_jsfeat: Ideal Case", idealCornersPass, true);
+    if (!idealCornersPass) console.log("Ideal Corners Details:", cornersIdeal);
+
+
+    // Test Case 2: Less than 3 markers
+    const mockMarkersFew = [
+        createMockMarker("TL", 10, 10, 20, 20),
+        createMockMarker("TR", 100, 10, 20, 20)
+    ];
+    const cornersFew = selectCornerMarkers_jsfeat(mockMarkersFew, 200, 200);
+    check("selectCornerMarkers_jsfeat: Less than 3 markers", cornersFew, null);
+
+    // Test Case 3: Three markers in a line (should fail to find distinct corners)
+     const mockMarkersLine = [
+        createMockMarker("M1", 10, 10, 20, 20),
+        createMockMarker("M2", 50, 10, 20, 20),
+        createMockMarker("M3", 100, 10, 20, 20)
+    ];
+    const cornersLine = selectCornerMarkers_jsfeat(mockMarkersLine, 200, 200);
+    // This might select some corners but they might not be valid or distinct enough.
+    // The function has internal checks for valid arrangement. Expect null or a failed valid check.
+    // A more robust check would be to see if the returned corners actually form a non-collinear shape.
+    // For now, checking if it's null, or logging if not, is a start.
+    let lineTestPass = cornersLine === null || 
+                       !(cornersLine.TL_code_corner && cornersLine.TR_code_corner && cornersLine.BL_code_corner &&
+                         cornersLine.TR_code_corner.x > cornersLine.TL_code_corner.x && 
+                         cornersLine.BL_code_corner.y > cornersLine.TL_code_corner.y); 
+    // If it returned non-null, the internal sanity check should have caught it.
+    // If it returns something, it means the current heuristic found some, so the test might need to be more specific.
+    check("selectCornerMarkers_jsfeat: Collinear markers", lineTestPass, true); 
+    if (!lineTestPass) console.log("Collinear Corners Details:", cornersLine);
+
+
+    console.log(`Image Processing Logic Tests Result: ${overallPass ? 'PASS' : 'FAIL'}`);
+    return overallPass;
 }
 /** Hides a spinner element. @param {String} spinnerId - ID of the spinner element. */
 function hideSpinnerUI(spinnerId) {
