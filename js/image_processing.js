@@ -775,11 +775,32 @@ function verifyAndFilterMarkers_jsfeat(marker_candidates, source_image, marker_p
                      break;
                 }
 
+                const inset_ratio = 0.20; // 20% inset from each side
+                const inset_w = Math.floor(current_cell_width * inset_ratio);
+                const inset_h = Math.floor(current_cell_height * inset_ratio);
+
+                let sample_x_start = cell_x_start + inset_w;
+                let sample_y_start = cell_y_start + inset_h;
+                let sample_x_end = cell_x_end - inset_w;
+                let sample_y_end = cell_y_end - inset_h;
+
+                // Log sampling bounds
+                window.logToScreen(`verifyAndFilterMarkers_jsfeat: Candidate ${i}, cell [${r}][${c}]: sampling original bounds x:${cell_x_start}-${cell_x_end}, y:${cell_y_start}-${cell_y_end}. Insets: w=${inset_w},h=${inset_h}. Sample area x:${sample_x_start}-${sample_x_end}, y:${sample_y_start}-${sample_y_end}`);
+
+                if (sample_x_start >= sample_x_end || sample_y_start >= sample_y_end) {
+                    window.logToScreen(`verifyAndFilterMarkers_jsfeat: Candidate ${i}, cell [${r}][${c}] has zero or negative sample dimension after inset. Using original cell for sampling.`);
+                    // Fallback to original cell boundaries if insets make it invalid
+                    sample_x_start = cell_x_start;
+                    sample_y_start = cell_y_start;
+                    sample_x_end = cell_x_end;
+                    sample_y_end = cell_y_end;
+                }
+
                 let sum_intensity = 0;
                 let num_pixels = 0;
 
-                for (let y_px = cell_y_start; y_px < cell_y_end; y_px++) {
-                    for (let x_px = cell_x_start; x_px < cell_x_end; x_px++) {
+                for (let y_px = sample_y_start; y_px < sample_y_end; y_px++) {
+                    for (let x_px = sample_x_start; x_px < sample_x_end; x_px++) {
                         if (x_px >= 0 && x_px < source_image.cols && y_px >= 0 && y_px < source_image.rows) {
                             const pixel_idx = y_px * source_image.cols + x_px;
                             sum_intensity += source_image.data[pixel_idx];
@@ -789,18 +810,18 @@ function verifyAndFilterMarkers_jsfeat(marker_candidates, source_image, marker_p
                 }
 
                 if (num_pixels === 0) {
-                    window.logToScreen(`verifyAndFilterMarkers_jsfeat: Candidate ${i}, cell [${r}][${c}] had no pixels in source image bounds, skipping candidate.`);
+                    window.logToScreen(`verifyAndFilterMarkers_jsfeat: Candidate ${i}, cell [${r}][${c}] had no pixels in sampling area (num_pixels = 0), skipping candidate.`);
                     possible_marker = false;
                     break;
                 }
 
                 const avg_intensity = sum_intensity / num_pixels;
                 sampled_pattern_intensity[r][c] = avg_intensity;
-                window.logToScreen(`verifyAndFilterMarkers_jsfeat: Candidate ${i}, cell [${r}][${c}]: avg_intensity = ${avg_intensity.toFixed(2)}`);
+                window.logToScreen(`verifyAndFilterMarkers_jsfeat: Candidate ${i}, cell [${r}][${c}]: avg_intensity = ${avg_intensity.toFixed(2)} (from ${num_pixels} pixels)`);
 
                 // Convert to binary based on Otsu threshold
-                // if average intensity <= otsu_threshold_val map to 'white', else 'black'.
-                derived_binary_pattern[r][c] = (avg_intensity <= otsu_threshold_val) ? 'white' : 'black';
+                // If avg_intensity is low (dark), it's 'black'. If high (light), it's 'white'.
+                derived_binary_pattern[r][c] = (avg_intensity <= otsu_threshold_val) ? 'black' : 'white';
             }
             if (!possible_marker) break;
         }
@@ -836,6 +857,84 @@ function verifyAndFilterMarkers_jsfeat(marker_candidates, source_image, marker_p
     window.logToScreen("verifyAndFilterMarkers_jsfeat: Found " + verified_markers.length + " verified markers.");
     window.logToScreen("verifyAndFilterMarkers_jsfeat: Function exit.");
     return verified_markers;
+}
+
+/**
+ * Performs Non-Maximum Suppression on a list of markers.
+ * @param {Array<Object>} markers - Array of marker objects (with x, y, width, height, area).
+ * @param {number} overlapThresh - Maximum allowed Intersection over Union (IoU).
+ * @returns {Array<Object>} Filtered list of markers after NMS.
+ */
+function nonMaxSuppression_jsfeat(markers, overlapThresh) {
+    window.logToScreen(`nonMaxSuppression_jsfeat: Entry. Received ${markers.length} markers. Overlap threshold: ${overlapThresh}`);
+
+    if (!markers || markers.length === 0) {
+        window.logToScreen("nonMaxSuppression_jsfeat: No markers to process. Exiting.");
+        return [];
+    }
+
+    // Ensure all markers have an area property.
+    // analyzeBlobs_jsfeat should provide this, but as a fallback:
+    markers.forEach(marker => {
+        if (typeof marker.area === 'undefined') {
+            marker.area = marker.width * marker.height;
+            window.logToScreen(`nonMaxSuppression_jsfeat: Marker area recalculated for marker at x:${marker.x},y:${marker.y}`);
+        }
+    });
+
+    // It's often beneficial to sort markers by a confidence score.
+    // Since we don't have one, using area (descending) as a proxy.
+    // findMarkerCandidates_jsfeat already sorts by area descending.
+    // If they were not pre-sorted, uncomment: markers.sort((a, b) => b.area - a.area);
+
+
+    let final_markers = [];
+    let remaining_markers = [...markers]; // Work with a copy
+
+    while (remaining_markers.length > 0) {
+        // Select the 'best' marker (first one, assuming sorted by area/confidence)
+        const current_marker = remaining_markers[0];
+        final_markers.push(current_marker);
+        window.logToScreen(`nonMaxSuppression_jsfeat: Selected marker: x=${current_marker.x}, y=${current_marker.y}, w=${current_marker.width}, h=${current_marker.height}, area=${current_marker.area}`);
+
+        // Remove current_marker from remaining_markers for the next main loop iteration
+        // and prepare a list for IoU checks in this iteration.
+        const markers_to_check_iou = remaining_markers.slice(1);
+        remaining_markers = []; // This will be rebuilt with markers that don't overlap too much
+
+        for (let i = 0; i < markers_to_check_iou.length; i++) {
+            const other_marker = markers_to_check_iou[i];
+
+            // Calculate Intersection Rect
+            const ix1 = Math.max(current_marker.x, other_marker.x);
+            const iy1 = Math.max(current_marker.y, other_marker.y);
+            const ix2 = Math.min(current_marker.x + current_marker.width, other_marker.x + other_marker.width);
+            const iy2 = Math.min(current_marker.y + current_marker.height, other_marker.y + other_marker.height);
+
+            const i_width = Math.max(0, ix2 - ix1);
+            const i_height = Math.max(0, iy2 - iy1);
+            const intersection_area = i_width * i_height;
+
+            // Calculate Union Area
+            // Area properties should exist from analyzeBlobs_jsfeat or fallback calculation
+            const union_area = current_marker.area + other_marker.area - intersection_area;
+
+            let iou = 0;
+            if (union_area > 0) {
+                iou = intersection_area / union_area;
+            }
+            window.logToScreen(`nonMaxSuppression_jsfeat: Comparing with marker (x=${other_marker.x},y=${other_marker.y}): IoU = ${iou.toFixed(3)}`);
+
+            if (iou <= overlapThresh) {
+                remaining_markers.push(other_marker); // Keep this marker for next iteration
+            } else {
+                window.logToScreen(`nonMaxSuppression_jsfeat: Suppressed marker: x=${other_marker.x}, y=${other_marker.y} due to IoU ${iou.toFixed(3)} > ${overlapThresh}`);
+            }
+        }
+    }
+
+    window.logToScreen(`nonMaxSuppression_jsfeat: Exiting. Returning ${final_markers.length} markers.`);
+    return final_markers;
 }
 
 
