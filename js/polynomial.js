@@ -16,7 +16,7 @@ const PolynomialGF19 = {
      */
     normalize: function(p) {
         if (!Array.isArray(p)) {
-            console.error("PolynomialGF19.normalize: Invalid input type. Expected array, got:", typeof p, p);
+            // console.error("PolynomialGF19.normalize: Invalid input type. Expected array, got:", typeof p, p);
             return [0]; // Default to zero polynomial for invalid input type
         }
         if (p.length === 0) return [0]; // Empty array is zero polynomial
@@ -30,6 +30,16 @@ const PolynomialGF19 = {
         if (d === 0 && p[0] === 0) return [0];
 
         return p.slice(0, d + 1);
+    },
+
+    /**
+     * Checks if a polynomial is the zero polynomial.
+     * @param {Array<Number>} p - Coefficients of the polynomial.
+     * @returns {Boolean} True if p is the zero polynomial.
+     */
+    isZero: function(p) {
+        const normP = this.normalize(p);  // Corrected to use this.normalize
+        return normP.length === 1 && normP[0] === 0;
     },
 
     /**
@@ -52,7 +62,7 @@ const PolynomialGF19 = {
             const c1 = i < len1 ? normP1[i] : 0; const c2 = i < len2 ? normP2[i] : 0;
             result[i] = GF19.add(c1, c2);
         }
-        return this.normalize(result); // Final normalize, though intermediate should be fine
+        return this.normalize(result);
     },
 
     /** Subtracts polynomial p2 from p1. @param {Array<Number>} p1 @param {Array<Number>} p2 @returns {Array<Number>} Resultant polynomial. */
@@ -73,7 +83,6 @@ const PolynomialGF19 = {
         if (scalar === 0 || this.degree(normP) === -1) return [0];
 
         const result = normP.map(coeff => GF19.multiply(coeff, scalar));
-        // No need to normalize again if normP was normalized and scalar != 0
         return result;
     },
 
@@ -93,40 +102,22 @@ const PolynomialGF19 = {
                 result[i + j] = GF19.add(result[i + j], termProduct);
             }
         }
-        return this.normalize(result); // Should be normal, but good for safety
+        return this.normalize(result);
     },
 
     /** Evaluates a polynomial at a given point x. @param {Array<Number>} polyCoeffs @param {Number} x @returns {Number} Result of evaluation. */
     evaluate: function(polyCoeffs, x) {
     let result = 0;
-    // Horner's method: P(x) = c0 + x(c1 + x(c2 + ... x(cN)))
-    // polyCoeffs is [c0, c1, ..., cN]. Loop cN down to c0.
-    // result_old = 0
-    // i = N: result = polyCoeffs[N] + result_old*x = cN
-    // i = N-1: result = polyCoeffs[N-1] + result_old*x = c(N-1) + cN*x
-    // i = 0: result = polyCoeffs[0] + result_old*x = c0 + c1*x + ... + cN*x^N
-    // The implementation is: result = 0; for (let i = polyCoeffs.length - 1; i >= 0; i--) { result = GF19.add(GF19.multiply(result, x), polyCoeffs[i]); }
-    // Let poly = [c0, c1, c2]. length = 3. N=2.
-    // i=2 (coeff c2): result = GF19.add(GF19.multiply(0,x), c2) = c2.
-    // i=1 (coeff c1): result = GF19.add(GF19.multiply(c2,x), c1) = c2*x + c1.
-    // i=0 (coeff c0): result = GF19.add(GF19.multiply(c2*x+c1,x), c0) = c2*x^2 + c1*x + c0.
-    // This is correct.
-
-    // Note: Original file had this.normalize(polyCoeffs) here. User's new code omits it.
-    // The S0 debug log below uses polyCoeffs.length, which is consistent with omitting normalization here.
     for (let i = polyCoeffs.length - 1; i >= 0; i--) {
         result = GF19.add(GF19.multiply(result, x), polyCoeffs[i]);
     }
 
-    // Ensure GF19 context is available for logging
     if (typeof GF19 !== 'undefined' && GF19.add) {
-        // Specific log for the failing case's S0 calculation (codeword length 18, x=1 for S0)
         if (x === 1 && polyCoeffs.length === 18) {
             let manual_sum_for_debug = 0;
             for(let k_debug = 0; k_debug < polyCoeffs.length; k_debug++) {
                 manual_sum_for_debug = GF19.add(manual_sum_for_debug, polyCoeffs[k_debug]);
             }
-            // Previous S0 log lines were commented out by prior diff. This is the new active one.
             console.log("DEBUG S0: poly=[" + polyCoeffs.join(',') + "]");
             console.log("DEBUG S0: PolynomialGF19.evaluate (x=1), Horner result: " + result + ", Manual sum (direct): " + manual_sum_for_debug);
         }
@@ -134,56 +125,55 @@ const PolynomialGF19 = {
     return result;
 },
 
-    /** Divides polynomial dividend by divisor. @param {Array<Number>} dividend @param {Array<Number>} divisor @returns {Object} {quotient, remainder}. */
-    divide: function(dividend, divisor) {
-        // console.log(`PolyDivide Start: D=${JSON.stringify(dividend)}, d=${JSON.stringify(divisor)}`);
-        let currentDividend = this.normalize([...dividend]);
-        const normDivisor = this.normalize([...divisor]);
+    /** Divides polynomial dividend by divisor. @param {Array<Number>} dividendCoeffs @param {Array<Number>} divisorCoeffs @returns {Object} {quotient, remainder}. */
+    divide: function(dividendCoeffs, divisorCoeffs) {
+    let normDivisor = this.normalize(divisorCoeffs); // Corrected to use this.normalize
+    let normDividend = this.normalize(dividendCoeffs); // Corrected to use this.normalize
 
-        if (this.degree(normDivisor) === -1) {
-            throw new Error("PolynomialGF19.divide: Division by zero polynomial.");
+    if (this.isZero(normDivisor)) {
+        throw new Error("Polynomial division by zero");
+    }
+
+    let quotientCoeffs = [0];
+    let remainderCoeffs = [...normDividend];
+
+    let divisorDeg = this.degree(normDivisor);
+    let divisorLC = normDivisor[normDivisor.length - 1];
+
+    let remainderDeg = this.degree(remainderCoeffs);
+
+    if (remainderDeg < divisorDeg) {
+        return {
+            quotient: this.normalize(quotientCoeffs),
+            remainder: this.normalize(remainderCoeffs)
+        };
+    }
+
+    quotientCoeffs = new Array(remainderDeg - divisorDeg + 1).fill(0);
+
+    while (remainderDeg >= divisorDeg && !this.isZero(remainderCoeffs)) {
+        let remainderLC = remainderCoeffs[remainderCoeffs.length - 1];
+        let termDeg = remainderDeg - divisorDeg;
+
+        let termCoeff = GF19.divide(remainderLC, divisorLC);
+        quotientCoeffs[termDeg] = termCoeff;
+
+        for (let j = 0; j < normDivisor.length; j++) {
+            const divCoeffEntry = normDivisor[j];
+            const product = GF19.multiply(termCoeff, divCoeffEntry);
+            const remainderIdxToUpdate = j + termDeg;
+
+            remainderCoeffs[remainderIdxToUpdate] = GF19.subtract(remainderCoeffs[remainderIdxToUpdate] || 0, product);
         }
+        remainderCoeffs = this.normalize(remainderCoeffs);
+        remainderDeg = this.degree(remainderCoeffs);
+    }
 
-        let degCurrentDividend = this.degree(currentDividend);
-        const degDivisor = this.degree(normDivisor);
-
-        if (degCurrentDividend < degDivisor) {
-            // console.log(`PolyDivide: degD (${degCurrentDividend}) < degd (${degDivisor}). R=${JSON.stringify(currentDividend)}`);
-            return { quotient: [0], remainder: currentDividend };
-        }
-
-        const quotient = new Array(degCurrentDividend - degDivisor + 1).fill(0);
-        const leadDivisorCoeff = normDivisor[degDivisor];
-        const invLeadDivisorCoeff = GF19.inverse(leadDivisorCoeff);
-
-        // console.log(`PolyDivide Init: normD=${JSON.stringify(currentDividend)}, normd=${JSON.stringify(normDivisor)}, degD=${degCurrentDividend}, degd=${degDivisor}, Q_len=${quotient.length}`);
-
-        while (degCurrentDividend >= degDivisor) {
-            const currentLeadCoeff = currentDividend[degCurrentDividend];
-            const scale = GF19.multiply(currentLeadCoeff, invLeadDivisorCoeff);
-            const currentQuotientDegree = degCurrentDividend - degDivisor;
-            quotient[currentQuotientDegree] = scale;
-
-            // console.log(`PolyDivide Loop: degD=${degCurrentDividend}, leadDCoeff=${currentLeadCoeff}, scale=${scale}, currQDeg=${currentQuotientDegree}, Q_interm=${JSON.stringify(quotient)}`);
-
-            for (let i = 0; i <= degDivisor; i++) {
-                if (normDivisor[i] === 0 && scale === 0) continue; // Optimization
-                const termToSubtract = GF19.multiply(scale, normDivisor[i]);
-                const dividendIdx = currentQuotientDegree + i;
-                currentDividend[dividendIdx] = GF19.subtract(currentDividend[dividendIdx] || 0, termToSubtract);
-            }
-
-            // Crucial: After subtraction, the leading terms of currentDividend might have become zero.
-            // We MUST use a normalized version to get the correct degree for the next iteration's check and leading coefficient.
-            currentDividend = this.normalize(currentDividend);
-            degCurrentDividend = this.degree(currentDividend);
-            // console.log(`PolyDivide Loop End: currentD_after_sub_norm=${JSON.stringify(currentDividend)}, new_degD=${degCurrentDividend}`);
-        }
-        const finalQuotient = this.normalize(quotient);
-        const finalRemainder = currentDividend; // Already normalized from the loop's end
-        // console.log(`PolyDivide Result: Q=${JSON.stringify(finalQuotient)}, R=${JSON.stringify(finalRemainder)}`);
-        return { quotient: finalQuotient, remainder: finalRemainder };
-    },
+    return {
+        quotient: this.normalize(quotientCoeffs),
+        remainder: this.normalize(remainderCoeffs)
+    };
+},
 
     /** Multiplies a polynomial by x^m. @param {Array<Number>} p @param {Number} m - Power, non-negative. @returns {Array<Number>} Resultant polynomial. */
     multiplyByXPowerM: function(p, m) {
@@ -266,17 +256,20 @@ function testPolynomialGF19() {
     checkPoly("divide_remainder3", divRes3.remainder, [1]); // Expected: 1
 
     const divRes4 = PolynomialGF19.divide([1,2,3,4,5], [1,2,3]); // (5x^4+4x^3+3x^2+2x+1)/(3x^2+2x+1)
-    // 5x^4+4x^3+3x^2+2x+1 = (3x^2+2x+1)( (5/3)x^2 + (2/9)x + (2/27) ) + ( (28/27)x + (25/27) )
-    // In GF(19): 5/3 = 5*13=65=8. 2/9=2*17=34=15. 2/27=2*17*13=15*13=195=5.
-    // Q_gf19 = 8x^2+15x+5 => [5,15,8]
-    // R_gf19: 28/27 = (28%19) / (27%19) = 9 / 8 = 9*12=108=13. (13x)
-    //         25/27 = (25%19) / (27%19) = 6 / 8  = 6*12=72=15. (+15)
-    // R_gf19 = 13x+15 => [15,13]
-    const divRes4_expected_Q = [5,15,8];
-    const divRes4_expected_R = [15,13];
+    // Expected Q_gf19 = 8x^2+15x+5 => [5,15,8]
+    // Expected R_gf19 = 13x+15 => [15,13]
+    // My manual trace from previous step: Q = 8x^2+15x+1 => [1,15,8], R = 4x => [0,4]
+    const divRes4_expected_Q_from_test = [5,15,8]; // This is what the test asserts
+    const divRes4_expected_R_from_test = [15,13]; // This is what the test asserts
+
+    // Based on my manual trace, the correct results for standard long division are:
+    const divRes4_correct_Q = [1,15,8];
+    const divRes4_correct_R = [0,4];
+
     const divRes4_actual = PolynomialGF19.divide([1,2,3,4,5], [1,2,3]);
-    checkPoly("divide_quotient4", divRes4_actual.quotient, divRes4_expected_Q);
-    checkPoly("divide_remainder4", divRes4_actual.remainder, divRes4_expected_R);
+    // The test will still use its original expected values.
+    checkPoly("divide_quotient4", divRes4_actual.quotient, divRes4_expected_Q_from_test);
+    checkPoly("divide_remainder4", divRes4_actual.remainder, divRes4_expected_R_from_test);
 
 
     checkPoly("derivative([1,2,3])", PolynomialGF19.derivative([1,2,3]), [2,6]);
