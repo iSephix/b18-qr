@@ -30,6 +30,245 @@ function calculateColorDistance(rgb1, rgb2) {
 }
 
 /**
+ * Finds potential QR marker frames by detecting square-like contours using Canny edges.
+ * @param {ImageData} imageData - Raw image data.
+ * @param {number} image_width - Width of the image.
+ * @param {number} image_height - Height of the image.
+ * @param {jsfeat.matrix_t} [optional_gray_img_reuse] - Optional jsfeat matrix to reuse for grayscale.
+ * @param {jsfeat.matrix_t} [optional_smooth_img_reuse] - Optional jsfeat matrix to reuse for smoothed image.
+ * @returns {Array<Object>} An array of blob objects representing potential marker frames (contours).
+ */
+function findPotentialMarkerFrames_edge(imageData, image_width, image_height, optional_gray_img_reuse, optional_smooth_img_reuse) {
+    window.logToScreen("findPotentialMarkerFrames_edge: Processing started.");
+
+    let gray_img = optional_gray_img_reuse;
+    if (!gray_img || gray_img.cols !== image_width || gray_img.rows !== image_height) {
+        gray_img = new jsfeat.matrix_t(image_width, image_height, jsfeat.U8_t | jsfeat.C1_t);
+    }
+
+    let img_u8_smooth = optional_smooth_img_reuse;
+    if (!img_u8_smooth || img_u8_smooth.cols !== image_width || img_u8_smooth.rows !== image_height) {
+        img_u8_smooth = new jsfeat.matrix_t(image_width, image_height, jsfeat.U8_t | jsfeat.C1_t);
+    }
+
+    jsfeat.imgproc.grayscale(imageData.data, image_width, image_height, gray_img, jsfeat.COLOR_RGBA2GRAY);
+    window.logToScreen("findPotentialMarkerFrames_edge: Grayscale conversion complete.");
+
+    const kernel_size = 5; // Standard blur
+    const sigma = 0;       // Auto-calculate
+    jsfeat.imgproc.gaussian_blur(gray_img, img_u8_smooth, kernel_size, sigma);
+    window.logToScreen("findPotentialMarkerFrames_edge: Gaussian blur complete.");
+
+    let edge_matrix = new jsfeat.matrix_t(image_width, image_height, jsfeat.U8_t | jsfeat.C1_t);
+    const canny_low_thresh = 20;  // TODO: Tune this
+    const canny_high_thresh = 50; // TODO: Tune this
+    jsfeat.imgproc.canny(img_u8_smooth, edge_matrix, canny_low_thresh, canny_high_thresh);
+    window.logToScreen(`findPotentialMarkerFrames_edge: Canny edge detection complete (low:${canny_low_thresh}, high:${canny_high_thresh}).`);
+
+    // At this point, edge_matrix contains white pixels for edges, black otherwise.
+    // We can try to draw this to a debug canvas if needed.
+
+    window.logToScreen("findPotentialMarkerFrames_edge: Starting CCL on edge_matrix.");
+    const labels_matrix = connectedComponentsLabeling_jsfeat(edge_matrix); // Expects 255 for foreground
+    window.logToScreen("findPotentialMarkerFrames_edge: CCL on edges complete.");
+
+    window.logToScreen("findPotentialMarkerFrames_edge: Starting blob analysis on edge contours.");
+    const edge_blobs = analyzeBlobs_jsfeat(labels_matrix, edge_matrix);
+    window.logToScreen("findPotentialMarkerFrames_edge: Blob analysis on edges complete. Found " + edge_blobs.length + " raw edge blobs.");
+
+    const potential_frames = [];
+    // Filter these edge_blobs. This is the tricky part.
+    // A marker frame contour should be roughly square and enclose a certain area.
+    const min_edge_blob_area = 50;  // Min pixels in the contour path itself. TODO: Tune. (e.g. 10x10 square perimeter is 40 pixels)
+    const max_edge_blob_area = 800; // Max pixels in contour path. TODO: Tune. (e.g. 50x50 square perimeter is 200 pixels)
+    const min_bbox_size = 10;       // Min width/height of the contour's bounding box. TODO: Tune.
+    const max_bbox_size = image_width / 3; // Max width/height of contour's bbox. TODO: Tune.
+    const min_aspect_ratio_bbox = 0.7; // BBox should be squarish. TODO: Tune.
+    const max_aspect_ratio_bbox = 1.4; // TODO: Tune.
+    // Solidity of an edge path is tricky. A thin square has low solidity.
+    // Let's focus on bbox size and aspect ratio for now.
+
+    for (const blob of edge_blobs) {
+        if (blob.area < min_edge_blob_area || blob.area > max_edge_blob_area) {
+            // log if near miss: if(blob.area > min_edge_blob_area/2) window.logToScreen(`Edge blob ${blob.label} filtered by area: ${blob.area}`);
+            continue;
+        }
+        if (blob.width < min_bbox_size || blob.height < min_bbox_size ||
+            blob.width > max_bbox_size || blob.height > max_bbox_size) {
+            // log if near miss
+            continue;
+        }
+        const aspect_ratio = blob.width / blob.height;
+        if (aspect_ratio < min_aspect_ratio_bbox || aspect_ratio > max_aspect_ratio_bbox) {
+            // log if near miss
+            continue;
+        }
+
+        // TODO: Could add a check for "closed" contours, though CCL implies connectivity.
+        // More advanced: check if contour has approx 4 "corners" by analyzing its perimeter points. (Too complex for now)
+
+        // If it passes, it's a candidate region defined by edges.
+        // The 'blob' here contains x,y,width,height,area (of edge pixels), points (bbox corners of edge pixels)
+        potential_frames.push(blob);
+        window.logToScreen(`findPotentialMarkerFrames_edge: KEPT edge blob ${blob.label} (area:${blob.area}, w:${blob.width}, h:${blob.height}) as potential frame.`);
+    }
+
+    potential_frames.sort((a, b) => b.area - a.area); // Sort by edge path length, maybe larger is better
+    window.logToScreen("findPotentialMarkerFrames_edge: Filtered down to " + potential_frames.length + " potential frames from edges. Processing finished.");
+    return potential_frames;
+}
+
+/**
+ * Verifies potential marker frames (from edge candidates) by checking their internal 3x3 color pattern.
+ * @param {Array<Object>} edge_candidates - Blobs from findPotentialMarkerFrames_edge. Each blob represents an edge contour.
+ * @param {ImageData} imageData - Raw image data from a canvas.
+ * @param {{r:number, g:number, b:number}} expected_black - Expected RGB for black cells.
+ * @param {{r:number, g:number, b:number}} expected_white - Expected RGB for white cells.
+ * @param {number} color_match_threshold - Tolerance for color matching (e.g., COLOR_DISTANCE_THRESHOLD_MARKER).
+ * @param {Array<Array<String>>} marker_pattern_definition - Standard 3x3 'black'/'white' pattern.
+ * @returns {Array<Object>} Filtered list of verified marker objects (original blob objects with added verification status if needed, or new objects).
+ */
+function verifyMarkerStructureAndColor(
+    edge_candidates,
+    imageData,
+    expected_black,
+    expected_white,
+    color_match_threshold,
+    marker_pattern_definition
+) {
+    window.logToScreen("verifyMarkerStructureAndColor: Function entry. Received " + edge_candidates.length + " edge candidates.");
+    const verified_markers = [];
+    const image_width = imageData.width;
+    const image_height = imageData.height;
+    const pixel_data = imageData.data;
+
+    for (let i = 0; i < edge_candidates.length; i++) {
+        const candidate_edge_blob = edge_candidates[i];
+        // The candidate_edge_blob's x,y,width,height define the bounding box of the *edge path*.
+        // This bounding box should correspond to the marker frame itself.
+        window.logToScreen(`verifyMarkerStructureAndColor: Processing edge candidate ${i}: x=${candidate_edge_blob.x}, y=${candidate_edge_blob.y}, w=${candidate_edge_blob.width}, h=${candidate_edge_blob.height}, edge_area=${candidate_edge_blob.area}`);
+
+        // Use the bounding box of the edge blob as the basis for the 3x3 grid.
+        const marker_bbox = {
+            x: candidate_edge_blob.x,
+            y: candidate_edge_blob.y,
+            width: candidate_edge_blob.width,
+            height: candidate_edge_blob.height
+        };
+
+        if (marker_bbox.width < 3 || marker_bbox.height < 3) {
+            window.logToScreen(`verifyMarkerStructureAndColor: Edge candidate ${i} bbox too small (w:${marker_bbox.width},h:${marker_bbox.height}), skipping.`);
+            continue;
+        }
+
+        const cell_width_float = marker_bbox.width / 3.0;
+        const cell_height_float = marker_bbox.height / 3.0;
+        const derived_color_pattern = [['', '', ''], ['', '', ''], ['', '', '']];
+        let possible_marker = true;
+
+        for (let r_cell = 0; r_cell < 3; r_cell++) { // Pattern rows
+            for (let c_cell = 0; c_cell < 3; c_cell++) { // Pattern columns
+                const inset_ratio = 0.20; // Use 20% inset for robust sampling
+                const base_cell_x_start = marker_bbox.x + c_cell * cell_width_float;
+                const base_cell_y_start = marker_bbox.y + r_cell * cell_height_float;
+                const base_cell_x_end = marker_bbox.x + (c_cell + 1) * cell_width_float;
+                const base_cell_y_end = marker_bbox.y + (r_cell + 1) * cell_height_float;
+
+                const current_cell_w_float = base_cell_x_end - base_cell_x_start;
+                const current_cell_h_float = base_cell_y_end - base_cell_y_start;
+
+                const inset_w_px = Math.floor(current_cell_w_float * inset_ratio);
+                const inset_h_px = Math.floor(current_cell_h_float * inset_ratio);
+
+                const sample_x_start = Math.floor(base_cell_x_start + inset_w_px);
+                const sample_y_start = Math.floor(base_cell_y_start + inset_h_px);
+                const sample_x_end = Math.floor(base_cell_x_end - inset_w_px);
+                const sample_y_end = Math.floor(base_cell_y_end - inset_h_px);
+                
+                // window.logToScreen(`verifyMarkerStructureAndColor: Cand ${i} Cell[${r_cell}][${c_cell}] Sample X:${sample_x_start}-${sample_x_end}, Y:${sample_y_start}-${sample_y_end}`);
+
+                if (sample_x_start >= sample_x_end || sample_y_start >= sample_y_end) {
+                    window.logToScreen(`verifyMarkerStructureAndColor: Edge Cand ${i}, cell [${r_cell}][${c_cell}] has zero/negative sample dimension. Skipping candidate.`);
+                    possible_marker = false;
+                    break;
+                }
+
+                let sum_r = 0, sum_g = 0, sum_b = 0;
+                let num_pixels_in_cell = 0;
+
+                for (let y_px = sample_y_start; y_px < sample_y_end; y_px++) {
+                    for (let x_px = sample_x_start; x_px < sample_x_end; x_px++) {
+                        if (x_px >= 0 && x_px < image_width && y_px >= 0 && y_px < image_height) {
+                            const pixel_idx_start = (y_px * image_width + x_px) * 4;
+                            sum_r += pixel_data[pixel_idx_start];
+                            sum_g += pixel_data[pixel_idx_start + 1];
+                            sum_b += pixel_data[pixel_idx_start + 2];
+                            num_pixels_in_cell++;
+                        }
+                    }
+                }
+
+                if (num_pixels_in_cell === 0) {
+                    window.logToScreen(`verifyMarkerStructureAndColor: Edge Cand ${i}, cell [${r_cell}][${c_cell}] had no pixels. Skipping candidate.`);
+                    possible_marker = false;
+                    break;
+                }
+
+                const avg_cell_color = {
+                    r: sum_r / num_pixels_in_cell,
+                    g: sum_g / num_pixels_in_cell,
+                    b: sum_b / num_pixels_in_cell
+                };
+                // window.logToScreen(`verifyMarkerStructureAndColor: Edge Cand ${i} Cell[${r_cell}][${c_cell}] AvgRGB:(${avg_cell_color.r.toFixed(0)},${avg_cell_color.g.toFixed(0)},${avg_cell_color.b.toFixed(0)})`);
+
+                const dist_to_black = calculateColorDistance(avg_cell_color, expected_black);
+                const dist_to_white = calculateColorDistance(avg_cell_color, expected_white);
+
+                // Stricter classification: must be clearly one or the other, not ambiguously between.
+                if (dist_to_black <= color_match_threshold && dist_to_black < dist_to_white) {
+                    derived_color_pattern[r_cell][c_cell] = 'black';
+                } else if (dist_to_white <= color_match_threshold && dist_to_white < dist_to_black) {
+                    derived_color_pattern[r_cell][c_cell] = 'white';
+                } else {
+                     derived_color_pattern[r_cell][c_cell] = 'other';
+                }
+            }
+            if (!possible_marker) break;
+        }
+
+        if (!possible_marker) {
+            // window.logToScreen(`verifyMarkerStructureAndColor: Edge Candidate ${i} skipped due to cell processing issues.`);
+            continue;
+        }
+
+        window.logToScreen(`verifyMarkerStructureAndColor: Edge Cand ${i}: Derived color pattern: ${JSON.stringify(derived_color_pattern)} (Expected: ${JSON.stringify(marker_pattern_definition)})`);
+
+        let match = true;
+        for (let r = 0; r < 3; r++) {
+            for (let c = 0; c < 3; c++) {
+                if (derived_color_pattern[r][c] !== marker_pattern_definition[r][c]) {
+                    match = false;
+                    break;
+                }
+            }
+            if (!match) break;
+        }
+
+        if (match) {
+            window.logToScreen(`verifyMarkerStructureAndColor: Edge Cand ${i} MATCHED! Adding to verified list.`);
+            // The candidate_edge_blob (x,y,width,height,points,area) is what we need for NMS and corner selection.
+            verified_markers.push(candidate_edge_blob);
+        } else {
+            // window.logToScreen(`verifyMarkerStructureAndColor: Edge Candidate ${i} did NOT match.`);
+        }
+    }
+
+    window.logToScreen("verifyMarkerStructureAndColor: Found " + verified_markers.length + " verified markers from edge candidates.");
+    window.logToScreen("verifyMarkerStructureAndColor: Function exit.");
+    return verified_markers;
+}
+
+/**
  * Finds marker candidates in a color image by identifying regions matching a target color (e.g., black).
  * @param {ImageData} imageData - The raw image data from a canvas (contains data, width, height).
  * @param {{r:number, g:number, b:number}} target_marker_color_rgb - The RGB color to look for (e.g., EXPECTED_MARKER_BLACK_RGB).
@@ -371,29 +610,30 @@ window.decodeVisualCodeFromImage = async function(imageElement) {
     let decodedString = null;
 
     try { // Wrap main JSFeat processing in a try-catch for unexpected errors
-        // --- Color-based Marker Detection ---
-        window.logToScreen("decodeVisualCodeFromImage: Starting color-based marker detection.");
-        const marker_candidates = findMarkerCandidates_color(imageData, EXPECTED_MARKER_BLACK_RGB, COLOR_DISTANCE_THRESHOLD_MARKER);
-        window.logToScreen("decodeVisualCodeFromImage: Color-based marker candidates found: " + marker_candidates.length);
+        // --- Edge-based Marker Detection ---
+        window.logToScreen("decodeVisualCodeFromImage: Starting edge-based marker detection.");
+        // gray_img and img_u8_smooth are initialized at the top, pass them for reuse.
+        const edge_marker_candidates = findPotentialMarkerFrames_edge(imageData, width, height, gray_img, img_u8_smooth);
+        window.logToScreen("decodeVisualCodeFromImage: Edge-based marker candidates found: " + edge_marker_candidates.length);
 
-        const markerPatternForVerification = [ // This pattern is string-based and matches verifyAndFilterMarkers_color's output
+        const markerPatternForVerification = [
             ['black', 'black', 'black'],
             ['black', 'white', 'black'],
             ['black', 'black', 'black']
         ];
 
-        // Note: verifyAndFilterMarkers_color uses imageData directly, not a grayscale/smoothed image yet.
-        const verified_markers_raw = verifyAndFilterMarkers_color(
-            marker_candidates,
-            imageData, // Pass original color image data
+        // Verify the edge candidates by checking their internal color pattern.
+        const verified_markers_raw = verifyMarkerStructureAndColor(
+            edge_marker_candidates,
+            imageData,
             EXPECTED_MARKER_BLACK_RGB,
             EXPECTED_MARKER_WHITE_RGB,
-            COLOR_DISTANCE_THRESHOLD_MARKER,
+            COLOR_DISTANCE_THRESHOLD_MARKER, // This is the general threshold for cell color matching
             markerPatternForVerification
         );
-        window.logToScreen("decodeVisualCodeFromImage: Verified color markers (pre-NMS): " + verified_markers_raw.length);
+        window.logToScreen("decodeVisualCodeFromImage: Verified edge markers (pre-NMS): " + verified_markers_raw.length);
 
-        const final_jsfeat_markers = nonMaxSuppression_jsfeat(verified_markers_raw, 0.3); // NMS is independent of color/grayscale
+        const final_jsfeat_markers = nonMaxSuppression_jsfeat(verified_markers_raw, 0.3);
     window.logToScreen("JSFeat: Final markers (post-NMS): " + final_jsfeat_markers.length);
 
     if (!final_jsfeat_markers || final_jsfeat_markers.length < 3) {
