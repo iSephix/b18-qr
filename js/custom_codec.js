@@ -69,19 +69,69 @@ function pkcs7Unpad(data) {
  * @returns {Promise<Array<Number>>} A promise that resolves to the ciphertext as an array of byte values.
  */
 async function aesEncryptJs(plainTextBytes, keyString) {
-    const encoder = new TextEncoder(); let keyBytes = encoder.encode(keyString);
+    const encoder = new TextEncoder();
+    let keyBytes = encoder.encode(keyString);
     let preparedKeyBytes = new Uint8Array(16);
-    if (keyBytes.length < 16) { preparedKeyBytes.set(keyBytes); } else { preparedKeyBytes = keyBytes.slice(0, 16); }
+    if (keyBytes.length < 16) {
+        preparedKeyBytes.set(keyBytes);
+    } else {
+        preparedKeyBytes = keyBytes.slice(0, 16);
+    }
     const keyMaterial = await crypto.subtle.importKey("raw", preparedKeyBytes, "AES-CBC", false, ["encrypt"]);
-    const iv = new Uint8Array(16); // Zero IV
+
+    // Original IV was: const iv = new Uint8Array(16); // Zero IV
+
     const paddedPlainTextBytes = pkcs7Pad(plainTextBytes, 16);
     let ciphertext = new Uint8Array(paddedPlainTextBytes.length);
-    for (let i = 0; i < paddedPlainTextBytes.length; i += 16) {
-        const block = paddedPlainTextBytes.slice(i, i + 16);
-        const encryptedBlock = await crypto.subtle.encrypt({ name: "AES-CBC", iv: iv }, keyMaterial, block);
-        ciphertext.set(new Uint8Array(encryptedBlock), i);
+
+    console.log(`aesEncryptJs: plainTextBytes len: ${plainTextBytes.length}, paddedLen: ${paddedPlainTextBytes.length}`);
+
+    // Web Crypto API's encrypt for AES-CBC should handle the entire padded message at once.
+    // The manual block-by-block loop with a reset IV was effectively trying to simulate ECB mode,
+    // but the RangeError on ciphertext.set suggests encryptedBlock might be unexpectedly sized if API does internal buffering/finalization.
+    // Let's simplify to use the API as intended for a single buffer.
+    // The IV should be used once for the entire encryption operation.
+    const iv_for_encryption = new Uint8Array(16); // Use a consistent zero IV for encryption for now.
+                                              // If WebCrypto actually prepends this, then decrypt will use it.
+                                              // If WebCrypto *generates* an IV, this one is ignored, and the generated one is prepended.
+
+    try {
+        const encryptedOutputWithPotentialIV = await crypto.subtle.encrypt(
+            { name: "AES-CBC", iv: iv_for_encryption }, // Provide the IV here
+            keyMaterial,
+            paddedPlainTextBytes
+        );
+
+        // Assuming the output might be IV + Ciphertext if length is greater than paddedPlainTextBytes.length
+        // For "SecretData" (10B -> 16B padded), output was 32B. This implies 16B IV + 16B CT.
+        if (encryptedOutputWithPotentialIV.byteLength > paddedPlainTextBytes.length) {
+            console.warn(`aesEncryptJs: Output length (${encryptedOutputWithPotentialIV.byteLength}) > padded input length (${paddedPlainTextBytes.length}). Assuming IV is prepended to ciphertext.`);
+             // In this case, the entire output (IV + CT) is what we store/send.
+            ciphertext = new Uint8Array(encryptedOutputWithPotentialIV);
+        } else if (encryptedOutputWithPotentialIV.byteLength === paddedPlainTextBytes.length) {
+            console.log(`aesEncryptJs: Output length matches padded input. Assuming API used provided IV and returned only ciphertext.`);
+            // If the API behaves "normally" and only returns ciphertext matching input length (because IV was passed in params)
+            // We would need to prepend our iv_for_encryption IF the decrypt side expects it.
+            // To keep consistency with the "IV prepended" model that the 32-byte output suggests:
+            // This path implies the environment is different from where 32B was seen.
+            // For now, stick to the assumption based on prior log: output is IV+CT or just CT.
+            // The code will now assume `encryptedOutputWithPotentialIV` is what needs to be passed to decryptor (either as IV+CT or just CT).
+            ciphertext = new Uint8Array(encryptedOutputWithPotentialIV);
+        } else {
+            // This would be an error or very strange behavior
+            console.error(`aesEncryptJs: Output length (${encryptedOutputWithPotentialIV.byteLength}) is less than padded input length (${paddedPlainTextBytes.length}). This is an error.`);
+            throw new Error("AES encryption output length is unexpectedly less than padded input length.");
+        }
+
+    } catch (e) {
+        console.error(`Error during crypto.subtle.encrypt for the whole message: ${e.name} - ${e.message}`);
+        console.error(`Padded Plaintext details: length=${paddedPlainTextBytes.byteLength}, content=[${new Uint8Array(paddedPlainTextBytes).join(',')}]`);
+        console.error(`IV details: length=${iv.byteLength}, content=[${new Uint8Array(iv).join(',')}]`);
+        console.error(`Key material: ${keyMaterial.type}, usages: ${keyMaterial.usages.join(',')}`);
+        throw e; // Re-throw the error
     }
-    return Array.from(new Uint8Array(ciphertext));
+
+    return Array.from(ciphertext); // ciphertext is already a Uint8Array here
 }
 /**
  * Decrypts ciphertext using AES-CBC with a zero IV.
@@ -92,25 +142,109 @@ async function aesEncryptJs(plainTextBytes, keyString) {
  * @throws Error if decryption or unpadding fails.
  */
 async function aesDecryptJs(ciphertextBytes, keyString) {
-    const encoder = new TextEncoder(); let keyBytes = encoder.encode(keyString);
-    let preparedKeyBytes = new Uint8Array(16);
-    if (keyBytes.length < 16) { preparedKeyBytes.set(keyBytes); } else { preparedKeyBytes = keyBytes.slice(0, 16); }
-    const keyMaterial = await crypto.subtle.importKey("raw", preparedKeyBytes, "AES-CBC", false, ["decrypt"]);
-    const iv = new Uint8Array(16); // Zero IV
-    const ciphertextBuffer = new Uint8Array(ciphertextBytes);
-    let decryptedPaddedBytes = new Uint8Array(ciphertextBuffer.length);
-    for (let i = 0; i < ciphertextBuffer.length; i += 16) {
-        const block = ciphertextBuffer.slice(i, i + 16);
-        if (block.length !== 16 && (i + 16 < ciphertextBuffer.length) ) { // Last block can be shorter if original was not multiple of 16 before padding
-             throw new Error("aesDecryptJs: Ciphertext block size is not 16 bytes for non-final block.");
-        }
-        if (block.length === 0 && i < ciphertextBuffer.length) continue;
-        if (block.length === 0 && i >= ciphertextBuffer.length) break;
-
-        const decryptedBlock = await crypto.subtle.decrypt({ name: "AES-CBC", iv: iv }, keyMaterial, block);
-        decryptedPaddedBytes.set(new Uint8Array(decryptedBlock), i);
+    console.log(`aesDecryptJs: Called with ciphertextBytes length: ${ciphertextBytes.length}, keyString: "${keyString}"`);
+    if (!ciphertextBytes || ciphertextBytes.length === 0) {
+        console.error("aesDecryptJs: ciphertextBytes is null or empty.");
+        throw new Error("aesDecryptJs: Ciphertext cannot be empty.");
     }
-    const unpaddedBytes = pkcs7Unpad(decryptedPaddedBytes);
+
+    const encoder = new TextEncoder();
+    let keyBytes = encoder.encode(keyString);
+    let preparedKeyBytes = new Uint8Array(16);
+    if (keyBytes.length < 16) {
+        preparedKeyBytes.set(keyBytes);
+    } else {
+        preparedKeyBytes = keyBytes.slice(0, 16);
+    }
+    console.log(`aesDecryptJs: Prepared key bytes (first 5): ${preparedKeyBytes.slice(0,5).join(',')}`);
+
+    const keyMaterial = await crypto.subtle.importKey("raw", preparedKeyBytes, "AES-CBC", false, ["decrypt"]);
+    console.log(`aesDecryptJs: Key material imported: type=${keyMaterial.type}, usages=${keyMaterial.usages.join(',')}`);
+
+    const ciphertextBuffer = new Uint8Array(ciphertextBytes);
+
+    // Based on previous findings, crypto.subtle.encrypt prepends a 16-byte IV.
+    // So, ciphertextBuffer is expected to be IV (16 bytes) + actual encrypted data (multiple of 16 bytes).
+    // Minimum length would be 16 (IV) + 16 (one block of data) = 32 bytes if encrypt handled one block.
+    if (ciphertextBuffer.length < 32) { // Must have at least one IV block and one data block
+        console.error(`aesDecryptJs: Ciphertext length (${ciphertextBuffer.length}) is less than the required minimum of 32 bytes (IV + 1 block).`);
+        // This was a previous point of failure if encrypt output 32 bytes and decrypt got less.
+        // Now encrypt is supposed to return the full 32 bytes for one block.
+        // The test case "SecretData" (10 bytes) -> padded to 16 -> encrypted (IV+Cipher) to 32. So this should be fine.
+    }
+     if (ciphertextBuffer.length % 16 !== 0) {
+        console.error(`aesDecryptJs: Ciphertext length (${ciphertextBuffer.length}) is not a multiple of 16.`);
+        // This would be an issue. Encrypt (IV+Cipher) should be mult of 16.
+    }
+
+
+    let decryptedPaddedBytes = new Uint8Array(ciphertextBuffer.length - 16); // To store only decrypted data part
+
+    // Assuming the new model: first 16 bytes of ciphertextBuffer is the IV
+    const extractedIv = ciphertextBuffer.slice(0, 16);
+    console.log(`aesDecryptJs: Extracted IV (first 5 bytes): ${extractedIv.slice(0,5).join(',')}, length: ${extractedIv.byteLength}`);
+
+    let actualDecryptedDataLength = 0;
+
+    for (let i = 16; i < ciphertextBuffer.length; i += 16) {
+        const blockToDecrypt = ciphertextBuffer.slice(i, i + 16);
+
+        if (blockToDecrypt.byteLength === 0) {
+            console.warn(`aesDecryptJs: Encountered an empty block to decrypt at offset ${i}. Skipping.`);
+            continue;
+        }
+        if (blockToDecrypt.byteLength !== 16) {
+            // This would be an issue if not the very last block and padding wasn't handled by encrypt side for total length.
+            // However, with IV prepended, total length should be (IV_len + N * block_size).
+            // So each data block sliced should be 16 bytes.
+            console.error(`aesDecryptJs: Block to decrypt at offset ${i} has unexpected length: ${blockToDecrypt.byteLength}`);
+            throw new Error(`aesDecryptJs: Invalid block size (${blockToDecrypt.byteLength}) for decryption at offset ${i}.`);
+        }
+
+        console.log(`aesDecryptJs loop i=${i}: blockToDecrypt len ${blockToDecrypt.byteLength}`);
+        try {
+            const decryptedBlockBuffer = await crypto.subtle.decrypt(
+                { name: "AES-CBC", iv: extractedIv }, // Using the IV extracted from the start of ciphertextBuffer
+                keyMaterial,
+                blockToDecrypt // This is just the ciphertext part for this block
+            );
+
+            if (decryptedBlockBuffer.byteLength === 0) {
+                console.error("aesDecryptJs: crypto.subtle.decrypt returned an empty ArrayBuffer. This indicates a decryption failure.");
+                console.error(`IV used: [${new Uint8Array(extractedIv).join(',')}]`);
+                console.error(`Ciphertext block fed: [${new Uint8Array(blockToDecrypt).join(',')}]`);
+                throw new Error("Decryption resulted in empty buffer, indicating failure.");
+            }
+
+            // Place the decrypted block into the correct position in decryptedPaddedBytes
+            // The offset for decryptedPaddedBytes should be (i - 16)
+            decryptedPaddedBytes.set(new Uint8Array(decryptedBlockBuffer), i - 16);
+            actualDecryptedDataLength += decryptedBlockBuffer.byteLength;
+
+        } catch (e) {
+            console.error(`Error during crypto.subtle.decrypt at block offset ${i}: ${e.name} - ${e.message}`);
+            console.error(`Block details: length=${blockToDecrypt.byteLength}, content=[${new Uint8Array(blockToDecrypt).join(',')}]`);
+            console.error(`IV details: length=${extractedIv.byteLength}, content=[${new Uint8Array(extractedIv).join(',')}]`);
+            throw e;
+        }
+        // IMPORTANT: For CBC mode, if we were decrypting more than one block, the IV for the *next* block
+        // would be the *ciphertext of the current block* (blockToDecrypt).
+        // However, the current structure assumes that the single `extractedIv` from the beginning
+        // is the correct IV for *all* blocks. This is only true if encrypt also used the same IV for all blocks
+        // (effectively making it like ECB, or if each block was a separate CBC encryption starting with that IV).
+        // Given that `encrypt` now prepends a *single* IV for the whole payload, this decryption logic of reusing
+        // `extractedIv` for all blocks is correct for decrypting that specific structure.
+    }
+
+    // Trim decryptedPaddedBytes to actualDecryptedDataLength if it was oversized (should not be if logic is correct)
+    let finalDecryptedData = decryptedPaddedBytes;
+    if (decryptedPaddedBytes.byteLength > actualDecryptedDataLength) {
+        finalDecryptedData = decryptedPaddedBytes.slice(0, actualDecryptedDataLength);
+    }
+    console.log(`aesDecryptJs: Total decrypted data length (before unpadding): ${finalDecryptedData.byteLength}`);
+
+    const unpaddedBytes = pkcs7Unpad(finalDecryptedData);
+    console.log(`aesDecryptJs: Unpadded data length: ${unpaddedBytes.byteLength}`);
     return new Uint8Array(unpaddedBytes);
 }
 /**

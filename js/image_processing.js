@@ -295,14 +295,13 @@ window.decodeVisualCodeFromImage = async function(imageElement) {
     }
     // The original OpenCV path has been removed.
     // If JSFeat path fails and doesn't return early, decodedString will be null here.
-    } catch (e) { // Catch unexpected errors from the main JSFeat pipeline
-        console.error("Unhandled error in decodeVisualCodeFromImage JSFeat pipeline:", e.stack || e);
-        updateDecodeResultUI('Critical error during image processing: ' + e.message + '. Please check console.');
-        hideSpinnerUI('decode-spinner'); // Ensure spinner is hidden on unexpected error
-        return null; // Ensure the function returns, allowing ui.js to proceed
-    }
-    // This final return is for cases where the try block completes but decodedString might still be null
-    // (e.g. all grid dimensions failed to decode, specific error message already set by then).
+    // The catch block above (lines 298-303) correctly handles errors for the main JSFeat pipeline try block (started line 61).
+    // This second catch block (previously lines 307-312) was orphaned and caused a syntax error
+    // due to an extra '}' at its beginning which prematurely closed the main function.
+    // Removing this entire invalid block.
+
+    // This final return is for cases where the try block completes successfully (or an error was caught and handled by returning null),
+    // and decodedString holds the result (which could be null if decoding steps failed logically but not via exception).
     return decodedString;
 }
 
