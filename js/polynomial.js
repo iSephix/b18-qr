@@ -96,15 +96,43 @@ const PolynomialGF19 = {
         return this.normalize(result); // Should be normal, but good for safety
     },
 
-    /** Evaluates a polynomial at a given point x. @param {Array<Number>} p @param {Number} x @returns {Number} Result of evaluation. */
-    evaluate: function(p, x) {
-        const normP = this.normalize(p); // Evaluate normalized form
-        let result = 0;
-        for (let i = normP.length - 1; i >= 0; i--) { // Horner's method
-            result = GF19.add(GF19.multiply(result, x), normP[i]);
+    /** Evaluates a polynomial at a given point x. @param {Array<Number>} polyCoeffs @param {Number} x @returns {Number} Result of evaluation. */
+    evaluate: function(polyCoeffs, x) {
+    let result = 0;
+    // Horner's method: P(x) = c0 + x(c1 + x(c2 + ... x(cN)))
+    // polyCoeffs is [c0, c1, ..., cN]. Loop cN down to c0.
+    // result_old = 0
+    // i = N: result = polyCoeffs[N] + result_old*x = cN
+    // i = N-1: result = polyCoeffs[N-1] + result_old*x = c(N-1) + cN*x
+    // i = 0: result = polyCoeffs[0] + result_old*x = c0 + c1*x + ... + cN*x^N
+    // The implementation is: result = 0; for (let i = polyCoeffs.length - 1; i >= 0; i--) { result = GF19.add(GF19.multiply(result, x), polyCoeffs[i]); }
+    // Let poly = [c0, c1, c2]. length = 3. N=2.
+    // i=2 (coeff c2): result = GF19.add(GF19.multiply(0,x), c2) = c2.
+    // i=1 (coeff c1): result = GF19.add(GF19.multiply(c2,x), c1) = c2*x + c1.
+    // i=0 (coeff c0): result = GF19.add(GF19.multiply(c2*x+c1,x), c0) = c2*x^2 + c1*x + c0.
+    // This is correct.
+
+    // Note: Original file had this.normalize(polyCoeffs) here. User's new code omits it.
+    // The S0 debug log below uses polyCoeffs.length, which is consistent with omitting normalization here.
+    for (let i = polyCoeffs.length - 1; i >= 0; i--) {
+        result = GF19.add(GF19.multiply(result, x), polyCoeffs[i]);
+    }
+
+    // Ensure GF19 context is available for logging
+    if (typeof GF19 !== 'undefined' && GF19.add) {
+        // Specific log for the failing case's S0 calculation (codeword length 18, x=1 for S0)
+        if (x === 1 && polyCoeffs.length === 18) {
+            let manual_sum_for_debug = 0;
+            for(let k_debug = 0; k_debug < polyCoeffs.length; k_debug++) {
+                manual_sum_for_debug = GF19.add(manual_sum_for_debug, polyCoeffs[k_debug]);
+            }
+            // Previous S0 log lines were commented out by prior diff. This is the new active one.
+            console.log("DEBUG S0: poly=[" + polyCoeffs.join(',') + "]");
+            console.log("DEBUG S0: PolynomialGF19.evaluate (x=1), Horner result: " + result + ", Manual sum (direct): " + manual_sum_for_debug);
         }
-        return result;
-    },
+    }
+    return result;
+},
 
     /** Divides polynomial dividend by divisor. @param {Array<Number>} dividend @param {Array<Number>} divisor @returns {Object} {quotient, remainder}. */
     divide: function(dividend, divisor) {

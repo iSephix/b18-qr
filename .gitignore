@@ -1,0 +1,13 @@
+# Ignore Node.js dependencies
+node_modules/
+
+# Ignore package lock files if any (though npm i --save-dev was used)
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Ignore build artifacts or logs if any are created by puppeteer or tests
+*.log
+build/
+dist/
+.DS_Store
