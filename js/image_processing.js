@@ -6,6 +6,249 @@ const colorRgbMapJs = {
     'green': { r: 0, g: 255, b: 0 }, 'yellow': { r: 255, g: 255, b: 0 }, 'red': { r: 255, g: 0, b: 0 },
     'gray': { r: 128, g: 128, b: 128 }, 'background': { r: 255, g: 255, b: 255 }
 };
+
+// Define expected RGB values for marker components
+const EXPECTED_MARKER_BLACK_RGB = { r: 0, g: 0, b: 0 };
+const EXPECTED_MARKER_WHITE_RGB = { r: 255, g: 255, b: 255 };
+
+// Define a threshold for color matching.
+// This is the maximum sum of absolute differences between R, G, and B channels
+// for a color to be considered 'close enough' to a target color.
+// E.g., if target is black (0,0,0), a pixel (10,20,30) has distance 10+20+30=60.
+// If COLOR_DISTANCE_THRESHOLD_MARKER is 150, this pixel would be considered 'black-ish'.
+const COLOR_DISTANCE_THRESHOLD_MARKER = 150; // Tune this value as needed
+
+/**
+ * Calculates the Manhattan distance between two RGB colors.
+ * @param {{r:number, g:number, b:number}} rgb1 - The first RGB color.
+ * @param {{r:number, g:number, b:number}} rgb2 - The second RGB color.
+ * @returns {number} The sum of absolute differences of R, G, B channels.
+ */
+function calculateColorDistance(rgb1, rgb2) {
+    if (!rgb1 || !rgb2) return Infinity; // Should not happen with valid inputs
+    return Math.abs(rgb1.r - rgb2.r) + Math.abs(rgb1.g - rgb2.g) + Math.abs(rgb1.b - rgb2.b);
+}
+
+/**
+ * Finds marker candidates in a color image by identifying regions matching a target color (e.g., black).
+ * @param {ImageData} imageData - The raw image data from a canvas (contains data, width, height).
+ * @param {{r:number, g:number, b:number}} target_marker_color_rgb - The RGB color to look for (e.g., EXPECTED_MARKER_BLACK_RGB).
+ * @param {number} color_match_threshold - The tolerance for color matching (e.g., COLOR_DISTANCE_THRESHOLD_MARKER).
+ * @returns {Array<Object>} An array of blob objects representing candidate regions.
+ */
+function findMarkerCandidates_color(imageData, target_marker_color_rgb, color_match_threshold) {
+    window.logToScreen("findMarkerCandidates_color: Processing started.");
+    const width = imageData.width;
+    const height = imageData.height;
+    const data = imageData.data; // This is a Uint8ClampedArray: [R,G,B,A, R,G,B,A, ...]
+
+    // Create a binary mask for jsfeat processing
+    let binary_mask_matrix = new jsfeat.matrix_t(width, height, jsfeat.U8_t | jsfeat.C1_t);
+
+    let current_pixel_rgb = { r: 0, g: 0, b: 0 };
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            const i = (y * width + x) * 4; // Index for R channel of pixel (x,y)
+            current_pixel_rgb.r = data[i];
+            current_pixel_rgb.g = data[i + 1];
+            current_pixel_rgb.b = data[i + 2];
+            // Alpha is data[i+3]
+
+            const distance = calculateColorDistance(current_pixel_rgb, target_marker_color_rgb);
+
+            if (distance <= color_match_threshold) {
+                binary_mask_matrix.data[y * width + x] = 255; // Foreground
+            } else {
+                binary_mask_matrix.data[y * width + x] = 0;   // Background
+            }
+        }
+    }
+    window.logToScreen("findMarkerCandidates_color: Binary mask created based on target color.");
+
+    // Use existing JSFeat CCL and blob analysis functions
+    window.logToScreen("findMarkerCandidates_color: Starting CCL on binary mask.");
+    console.time("CCL_jsfeat_color");
+    const labels_matrix = connectedComponentsLabeling_jsfeat(binary_mask_matrix);
+    console.timeEnd("CCL_jsfeat_color");
+    window.logToScreen("findMarkerCandidates_color: CCL complete. Labels matrix created.");
+
+    window.logToScreen("findMarkerCandidates_color: Starting blob analysis.");
+    console.time("analyzeBlobs_jsfeat_color");
+    const raw_blobs = analyzeBlobs_jsfeat(labels_matrix, binary_mask_matrix);
+    console.timeEnd("analyzeBlobs_jsfeat_color");
+    window.logToScreen("findMarkerCandidates_color: Blob analysis complete. Found " + raw_blobs.length + " raw blobs.");
+
+    // Apply similar filtering as in the old findMarkerCandidates_jsfeat (area, aspect ratio)
+    // These might need tuning for color-based candidates.
+    const min_area = 30; // Minimum area for a candidate blob
+    const max_area = (width * height) / 9; // Max 1/9th of image area
+    const min_aspect_ratio = 0.3; // Adjusted for potentially less regular shapes from color
+    const max_aspect_ratio = 3.0; // Adjusted
+
+    const marker_candidates = raw_blobs.filter(blob => {
+        const aspect_ratio = blob.width / blob.height;
+        const condition = blob.area >= min_area &&
+               blob.area <= max_area &&
+               aspect_ratio >= min_aspect_ratio &&
+               aspect_ratio <= max_aspect_ratio;
+        if (!condition && blob.area >= min_area / 2) { // Log near misses for tuning
+            window.logToScreen(`findMarkerCandidates_color: Blob ${blob.label} filtered out: area=${blob.area}, asp=${aspect_ratio.toFixed(2)}`);
+        }
+        return condition;
+    });
+
+    // Sort by area, descending
+    marker_candidates.sort((a, b) => b.area - a.area);
+    window.logToScreen("findMarkerCandidates_color: Filtered down to " + marker_candidates.length + " candidates. Processing finished.");
+    return marker_candidates;
+}
+
+/**
+ * Verifies marker candidates by checking their 3x3 cell pattern against expected colors.
+ * @param {Array<Object>} marker_candidates - Blobs from findMarkerCandidates_color (assumed to be black frames).
+ * @param {ImageData} imageData - Raw image data from a canvas.
+ * @param {{r:number, g:number, b:number}} expected_black - Expected RGB for black cells.
+ * @param {{r:number, g:number, b:number}} expected_white - Expected RGB for white cells.
+ * @param {number} color_match_threshold - Tolerance for color matching.
+ * @param {Array<Array<String>>} marker_pattern_definition - e.g., [['black', 'black', 'black'], ['black', 'white', 'black'], ...]
+ * @returns {Array<Object>} Filtered list of verified marker objects.
+ */
+function verifyAndFilterMarkers_color(
+    marker_candidates,
+    imageData,
+    expected_black,
+    expected_white,
+    color_match_threshold,
+    marker_pattern_definition
+) {
+    window.logToScreen("verifyAndFilterMarkers_color: Function entry. Received " + marker_candidates.length + " candidates.");
+    const verified_markers = [];
+    const image_width = imageData.width;
+    const image_height = imageData.height;
+    const pixel_data = imageData.data;
+
+    for (let i = 0; i < marker_candidates.length; i++) {
+        const candidate = marker_candidates[i];
+        window.logToScreen(`verifyAndFilterMarkers_color: Processing candidate ${i}: x=${candidate.x}, y=${candidate.y}, w=${candidate.width}, h=${candidate.height}`);
+
+        if (candidate.width < 3 || candidate.height < 3) {
+            window.logToScreen(`verifyAndFilterMarkers_color: Candidate ${i} too small (w:${candidate.width},h:${candidate.height}), skipping.`);
+            continue;
+        }
+
+        const cell_width_float = candidate.width / 3.0;
+        const cell_height_float = candidate.height / 3.0;
+        const derived_color_pattern = [['', '', ''], ['', '', ''], ['', '', '']];
+        let possible_marker = true;
+
+        // Optional: Verify average color of the candidate blob itself is 'black-ish'
+        // This could be added for extra robustness if findMarkerCandidates_color is too loose.
+        // For now, trust candidates from findMarkerCandidates_color are predominantly black.
+
+        for (let r_cell = 0; r_cell < 3; r_cell++) { // Pattern rows
+            for (let c_cell = 0; c_cell < 3; c_cell++) { // Pattern columns
+                // Use inset logic for sampling robustness
+                const inset_ratio = 0.20; // 20% inset
+                const base_cell_x_start = candidate.x + c_cell * cell_width_float;
+                const base_cell_y_start = candidate.y + r_cell * cell_height_float;
+                const base_cell_x_end = candidate.x + (c_cell + 1) * cell_width_float;
+                const base_cell_y_end = candidate.y + (r_cell + 1) * cell_height_float;
+
+                const current_cell_w_float = base_cell_x_end - base_cell_x_start;
+                const current_cell_h_float = base_cell_y_end - base_cell_y_start;
+
+                const inset_w_px = Math.floor(current_cell_w_float * inset_ratio);
+                const inset_h_px = Math.floor(current_cell_h_float * inset_ratio);
+
+                const sample_x_start = Math.floor(base_cell_x_start + inset_w_px);
+                const sample_y_start = Math.floor(base_cell_y_start + inset_h_px);
+                const sample_x_end = Math.floor(base_cell_x_end - inset_w_px);
+                const sample_y_end = Math.floor(base_cell_y_end - inset_h_px);
+
+                window.logToScreen(`verifyAndFilterMarkers_color: Cand ${i} Cell[${r_cell}][${c_cell}] Base X:${base_cell_x_start.toFixed(1)}-${base_cell_x_end.toFixed(1)}, Y:${base_cell_y_start.toFixed(1)}-${base_cell_y_end.toFixed(1)}. Sample X:${sample_x_start}-${sample_x_end}, Y:${sample_y_start}-${sample_y_end}`);
+
+
+                if (sample_x_start >= sample_x_end || sample_y_start >= sample_y_end) {
+                    window.logToScreen(`verifyAndFilterMarkers_color: Candidate ${i}, cell [${r_cell}][${c_cell}] has zero/negative sample dimension after inset. Skipping candidate.`);
+                    possible_marker = false;
+                    break;
+                }
+
+                let sum_r = 0, sum_g = 0, sum_b = 0;
+                let num_pixels_in_cell = 0;
+
+                for (let y_px = sample_y_start; y_px < sample_y_end; y_px++) {
+                    for (let x_px = sample_x_start; x_px < sample_x_end; x_px++) {
+                        if (x_px >= 0 && x_px < image_width && y_px >= 0 && y_px < image_height) {
+                            const pixel_idx_start = (y_px * image_width + x_px) * 4;
+                            sum_r += pixel_data[pixel_idx_start];
+                            sum_g += pixel_data[pixel_idx_start + 1];
+                            sum_b += pixel_data[pixel_idx_start + 2];
+                            num_pixels_in_cell++;
+                        }
+                    }
+                }
+
+                if (num_pixels_in_cell === 0) {
+                    window.logToScreen(`verifyAndFilterMarkers_color: Candidate ${i}, cell [${r_cell}][${c_cell}] had no pixels in source image bounds or sample area. Skipping candidate.`);
+                    possible_marker = false;
+                    break;
+                }
+
+                const avg_cell_color = {
+                    r: sum_r / num_pixels_in_cell,
+                    g: sum_g / num_pixels_in_cell,
+                    b: sum_b / num_pixels_in_cell
+                };
+                window.logToScreen(`verifyAndFilterMarkers_color: Cand ${i} Cell[${r_cell}][${c_cell}] AvgRGB:(${avg_cell_color.r.toFixed(0)},${avg_cell_color.g.toFixed(0)},${avg_cell_color.b.toFixed(0)}) from ${num_pixels_in_cell}px`);
+
+                const dist_to_black = calculateColorDistance(avg_cell_color, expected_black);
+                const dist_to_white = calculateColorDistance(avg_cell_color, expected_white);
+
+                if (dist_to_black <= color_match_threshold && dist_to_black < dist_to_white) {
+                    derived_color_pattern[r_cell][c_cell] = 'black';
+                } else if (dist_to_white <= color_match_threshold && dist_to_white < dist_to_black) {
+                    derived_color_pattern[r_cell][c_cell] = 'white';
+                } else {
+                     derived_color_pattern[r_cell][c_cell] = 'other'; // Neither black nor white enough
+                     window.logToScreen(`verifyAndFilterMarkers_color: Cand ${i} Cell[${r_cell}][${c_cell}] color is 'other'. DistBlack:${dist_to_black.toFixed(0)}, DistWhite:${dist_to_white.toFixed(0)}`);
+                }
+            }
+            if (!possible_marker) break;
+        }
+
+        if (!possible_marker) {
+            window.logToScreen(`verifyAndFilterMarkers_color: Candidate ${i} skipped due to cell processing issues.`);
+            continue;
+        }
+
+        window.logToScreen(`verifyAndFilterMarkers_color: Candidate ${i}: Derived color pattern: ${JSON.stringify(derived_color_pattern)}`);
+        window.logToScreen(`verifyAndFilterMarkers_color: Candidate ${i}: Expected pattern: ${JSON.stringify(marker_pattern_definition)}`);
+
+        let match = true;
+        for (let r = 0; r < 3; r++) {
+            for (let c = 0; c < 3; c++) {
+                if (derived_color_pattern[r][c] !== marker_pattern_definition[r][c]) {
+                    match = false;
+                    break;
+                }
+            }
+            if (!match) break;
+        }
+
+        if (match) {
+            window.logToScreen(`verifyAndFilterMarkers_color: Candidate ${i} MATCHED! Adding to verified list.`);
+            verified_markers.push(candidate);
+        } else {
+            window.logToScreen(`verifyAndFilterMarkers_color: Candidate ${i} did NOT match.`);
+        }
+    }
+
+    window.logToScreen("verifyAndFilterMarkers_color: Found " + verified_markers.length + " verified markers.");
+    window.logToScreen("verifyAndFilterMarkers_color: Function exit.");
+    return verified_markers;
+}
+
 const shapesJs = ['square', 'circle', 'triangle'];
 const colorsJs = ['black', 'white', 'blue', 'green', 'yellow', 'red'];
 const symbolListJs = [];
@@ -70,42 +313,29 @@ window.decodeVisualCodeFromImage = async function(imageElement) {
     let decodedString = null;
 
     try { // Wrap main JSFeat processing in a try-catch for unexpected errors
-        // Convert to grayscale
-    // jsfeat.imgproc.grayscale(source_data, width, height, dest_matrix, code = 0)
-    // Assuming RGBA input from canvas ImageData
-    jsfeat.imgproc.grayscale(imageData.data, width, height, gray_img, jsfeat.COLOR_RGBA2GRAY);
-    window.logToScreen('JSFeat: Grayscale conversion complete.');
+        // --- Color-based Marker Detection ---
+        window.logToScreen("decodeVisualCodeFromImage: Starting color-based marker detection.");
+        const marker_candidates = findMarkerCandidates_color(imageData, EXPECTED_MARKER_BLACK_RGB, COLOR_DISTANCE_THRESHOLD_MARKER);
+        window.logToScreen("decodeVisualCodeFromImage: Color-based marker candidates found: " + marker_candidates.length);
 
-    // Apply Gaussian blur
-    // jsfeat.imgproc.gaussian_blur(source_matrix, dest_matrix, kernel_size, sigma = 0)
-    // Kernel size should be odd and positive. Let's use 5x5 with sigma 0 (auto-calculated)
-    const kernel_size = 5; // Example kernel size
-    const sigma = 0;       // Auto-calculate sigma from kernel_size
-    jsfeat.imgproc.gaussian_blur(gray_img, img_u8_smooth, kernel_size, sigma);
-    window.logToScreen('JSFeat: Gaussian blur complete. Smooth image: ' + img_u8_smooth.cols + 'x' + img_u8_smooth.rows);
+        const markerPatternForVerification = [ // This pattern is string-based and matches verifyAndFilterMarkers_color's output
+            ['black', 'black', 'black'],
+            ['black', 'white', 'black'],
+            ['black', 'black', 'black']
+        ];
 
-    // --- Start of JSFeat Binarization ---
-    const otsu_thresh_val = otsu_threshold_jsfeat(img_u8_smooth);
-    window.logToScreen('JSFeat: Otsu threshold calculated: ' + otsu_thresh_val);
+        // Note: verifyAndFilterMarkers_color uses imageData directly, not a grayscale/smoothed image yet.
+        const verified_markers_raw = verifyAndFilterMarkers_color(
+            marker_candidates,
+            imageData, // Pass original color image data
+            EXPECTED_MARKER_BLACK_RGB,
+            EXPECTED_MARKER_WHITE_RGB,
+            COLOR_DISTANCE_THRESHOLD_MARKER,
+            markerPatternForVerification
+        );
+        window.logToScreen("decodeVisualCodeFromImage: Verified color markers (pre-NMS): " + verified_markers_raw.length);
 
-    let binary_img = new jsfeat.matrix_t(width, height, jsfeat.U8_t | jsfeat.C1_t);
-    apply_threshold_jsfeat(img_u8_smooth, binary_img, otsu_thresh_val, true); // true for inverted behavior
-    window.logToScreen('JSFeat: Image binarized. Dimensions: ' + binary_img.cols + 'x' + binary_img.rows);
-    // --- End of JSFeat Binarization ---
-
-    const marker_candidates = findMarkerCandidates_jsfeat(binary_img);
-    window.logToScreen("JSFeat: Initial marker candidates found: " + marker_candidates.length);
-
-    const markerPatternForVerification = [
-        ['black', 'black', 'black'],
-        ['black', 'white', 'black'],
-        ['black', 'black', 'black']
-    ];
-
-    const verified_markers_raw = verifyAndFilterMarkers_jsfeat(marker_candidates, img_u8_smooth, markerPatternForVerification, otsu_thresh_val);
-    window.logToScreen("JSFeat: Verified markers (pre-NMS): " + verified_markers_raw.length);
-
-    const final_jsfeat_markers = nonMaxSuppression_jsfeat(verified_markers_raw, 0.3);
+        const final_jsfeat_markers = nonMaxSuppression_jsfeat(verified_markers_raw, 0.3); // NMS is independent of color/grayscale
     window.logToScreen("JSFeat: Final markers (post-NMS): " + final_jsfeat_markers.length);
 
     if (!final_jsfeat_markers || final_jsfeat_markers.length < 3) {
@@ -134,6 +364,19 @@ window.decodeVisualCodeFromImage = async function(imageElement) {
             const flattened_dst_jsfeat = [];
             dst_transform_pts_jsfeat.forEach(p => { flattened_dst_jsfeat.push(p.x); flattened_dst_jsfeat.push(p.y); });
 
+            // --- Deferred Grayscale Conversion and Blur (For Warping and Symbol ID) ---
+            window.logToScreen("JSFeat: Performing deferred grayscale conversion for warping/symbol ID.");
+            // gray_img and img_u8_smooth are initialized at the top of decodeVisualCodeFromImage
+
+            jsfeat.imgproc.grayscale(imageData.data, width, height, gray_img, jsfeat.COLOR_RGBA2GRAY);
+            window.logToScreen('JSFeat: Deferred grayscale conversion complete.');
+
+            const kernel_size = 5; // Consistent kernel size
+            const sigma = 0;       // Auto-calculate sigma
+            jsfeat.imgproc.gaussian_blur(gray_img, img_u8_smooth, kernel_size, sigma);
+            window.logToScreen('JSFeat: Deferred Gaussian blur complete. Smooth image for warp: ' + img_u8_smooth.cols + 'x' + img_u8_smooth.rows);
+            // --- End Deferred Grayscale ---
+
             let H_global_matrix = new jsfeat.matrix_t(3, 3, jsfeat.F32_t | jsfeat.C1_t);
             let H_global_inv_matrix = new jsfeat.matrix_t(3, 3, jsfeat.F32_t | jsfeat.C1_t);
 
@@ -156,16 +399,17 @@ window.decodeVisualCodeFromImage = async function(imageElement) {
 
             if (window.logToScreen) {
                 window.logToScreen(`JSFeat DEBUG: H_global_inv_matrix (after invert_3x3, before warp): ${H_global_inv_matrix.cols}x${H_global_inv_matrix.rows}, data: [${H_global_inv_matrix.data.slice(0,9).join(', ')}]`);
-                window.logToScreen(`JSFeat DEBUG: img_u8_smooth (source for warp): ${img_u8_smooth.cols}x${img_u8_smooth.rows}, type: ${img_u8_smooth.type}`);
+                window.logToScreen(`JSFeat DEBUG: img_u8_smooth (source for warp): ${img_u8_smooth.cols}x${img_u8_smooth.rows}, type: ${img_u8_smooth.type}`); // This must now be populated correctly
                 window.logToScreen(`JSFeat DEBUG: warped_img_jsfeat (dest for warp, before warp): ${warped_img_jsfeat.cols}x${warped_img_jsfeat.rows}, type: ${warped_img_jsfeat.type}`);
             }
 
+            // Warp perspective expects a grayscale image (img_u8_smooth)
             jsfeat.imgproc.warp_perspective(img_u8_smooth, warped_img_jsfeat, H_global_inv_matrix, 0);
 
             if (window.logToScreen) {
                 window.logToScreen(`JSFeat DEBUG: warped_img_jsfeat (after warp): ${warped_img_jsfeat.cols}x${warped_img_jsfeat.rows}, first few data: [${warped_img_jsfeat.data.slice(0,10).join(', ')}]`);
             }
-            window.logToScreen("JSFeat: Global perspective warp complete."); // This was the original log, kept for sequence.
+            window.logToScreen("JSFeat: Global perspective warp complete.");
 
             if (!warped_img_jsfeat || warped_img_jsfeat.rows === 0 || warped_img_jsfeat.cols === 0) {
                 window.logToScreen("JSFeat ERROR: Warped image is invalid.");
