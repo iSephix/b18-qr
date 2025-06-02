@@ -372,40 +372,74 @@ window.decodeVisualCodeFromImage = async function(imageElement) {
     let decodedString = null;
 
     try { // Wrap main JSFeat processing in a try-catch for unexpected errors
-        // --- Color-based Marker Detection ---
-        window.logToScreen("decodeVisualCodeFromImage: Starting color-based marker detection.");
-        const marker_candidates = findMarkerCandidates_color(imageData, EXPECTED_MARKER_BLACK_RGB, COLOR_DISTANCE_THRESHOLD_MARKER);
-        window.logToScreen("decodeVisualCodeFromImage: Color-based marker candidates found: " + marker_candidates.length);
+        // --- New Cell-Based Marker Detection ---
+        window.logToScreen("decodeVisualCodeFromImage: Starting NEW cell-based marker detection.");
 
-        const markerPatternForVerification = [ // This pattern is string-based and matches verifyAndFilterMarkers_color's output
-            ['black', 'black', 'black'],
-            ['black', 'white', 'black'],
-            ['black', 'black', 'black']
+        // Define parameters for the new cell-based approach
+        const backgroundColorRGB = { r: 255, g: 0, b: 255 }; // Magenta background
+        const cellColorsMapForExtraction = CUST_CODEC_COLOR_RGB_MAP; // Use existing map
+        const colorMatchThresholdForCells = 150; // Initial value, can be tuned
+        const cellGeometricFilters = {
+            min_cell_area: 25, // Cells could be small
+            max_cell_area: 2500, // Max area for a single cell
+            min_cell_aspect_ratio: 0.5,
+            max_cell_aspect_ratio: 2.0
+        };
+        // Define the expected 3x3 marker pattern in terms of color names
+        const markerPatternArray = [
+            [CUST_CODEC_MARKER_OUTER[0], CUST_CODEC_MARKER_OUTER[0], CUST_CODEC_MARKER_OUTER[0]],
+            [CUST_CODEC_MARKER_OUTER[0], CUST_CODEC_MARKER_INNER[0], CUST_CODEC_MARKER_OUTER[0]],
+            [CUST_CODEC_MARKER_OUTER[0], CUST_CODEC_MARKER_OUTER[0], CUST_CODEC_MARKER_OUTER[0]]
         ];
-
-        // Note: verifyAndFilterMarkers_color uses imageData directly, not a grayscale/smoothed image yet.
-        const verified_markers_raw = verifyAndFilterMarkers_color(
-            marker_candidates,
-            imageData, // Pass original color image data
-            EXPECTED_MARKER_BLACK_RGB,
-            EXPECTED_MARKER_WHITE_RGB,
-            COLOR_DISTANCE_THRESHOLD_MARKER,
-            markerPatternForVerification
+        
+        const allCells = extractAllCells(
+            imageData,
+            backgroundColorRGB,
+            cellColorsMapForExtraction,
+            colorMatchThresholdForCells,
+            cellGeometricFilters
         );
-        window.logToScreen("decodeVisualCodeFromImage: Verified color markers (pre-NMS): " + verified_markers_raw.length);
 
-        const final_jsfeat_markers = nonMaxSuppression_jsfeat(verified_markers_raw, 0.3); // NMS is independent of color/grayscale
-    window.logToScreen("JSFeat: Final markers (post-NMS): " + final_jsfeat_markers.length);
+        let final_jsfeat_markers_from_cells = [];
+        if (allCells.length > 0) {
+            // Estimate average cell width/height or use defaults
+            let avgCellW = 10; // Default
+            let avgCellH = 10; // Default
+            if (allCells.length > 0) {
+                avgCellW = allCells.reduce((sum, cell) => sum + cell.width, 0) / allCells.length;
+                avgCellH = allCells.reduce((sum, cell) => sum + cell.height, 0) / allCells.length;
+            }
+            const markerGapTolerance = 0.75; // 75% tolerance
 
-    if (!final_jsfeat_markers || final_jsfeat_markers.length < 3) {
-        window.logToScreen("JSFeat WARNING: <3 final markers (" + (final_jsfeat_markers ? final_jsfeat_markers.length : 0) + "). Attempting corner selection.");
-        updateDecodeResultUI('Error: Could not find enough distinct markers (JSFeat). Try adjusting image or lighting.');
-    }
+            const raw_markers_from_cells = findMarkersFromCells(
+                allCells,
+                markerPatternArray,
+                avgCellW,
+                avgCellH,
+                markerGapTolerance
+            );
+            window.logToScreen(`decodeVisualCodeFromImage: Raw markers from cells: ${raw_markers_from_cells.length}`);
+            
+            final_jsfeat_markers_from_cells = nonMaxSuppression_jsfeat(raw_markers_from_cells, 0.3);
+            window.logToScreen("JSFeat: Final markers from cells (post-NMS): " + final_jsfeat_markers_from_cells.length);
+        } else {
+            window.logToScreen("decodeVisualCodeFromImage: No cells extracted, skipping marker finding from cells.");
+        }
 
-    // --- JSFeat Global Perspective Transform ---
-    const selected_jsfeat_code_corners = selectCornerMarkers_jsfeat(final_jsfeat_markers, width, height);
+        if (!final_jsfeat_markers_from_cells || final_jsfeat_markers_from_cells.length < 3) {
+            window.logToScreen("JSFeat WARNING (Cell-based): <3 final markers (" + (final_jsfeat_markers_from_cells ? final_jsfeat_markers_from_cells.length : 0) + ").");
+            // updateDecodeResultUI might be too strong here if there's a fallback or other methods
+            // For now, let it proceed to selectCornerMarkers_jsfeat which will handle null/empty.
+        }
+        
+        // --- End New Cell-Based Marker Detection ---
 
-    let warped_img_jsfeat = null;
+
+        // --- JSFeat Global Perspective Transform (using markers from cell-based approach) ---
+        // Note: The old findMarkerCandidates_color and verifyAndFilterMarkers_color path is now replaced.
+        const selected_jsfeat_code_corners = selectCornerMarkers_jsfeat(final_jsfeat_markers_from_cells, width, height);
+
+        let warped_img_jsfeat = null;
 
     if (selected_jsfeat_code_corners) {
         window.logToScreen("JSFeat: Selected code corners: TL(" + selected_jsfeat_code_corners.TL_code_corner.x + ","+selected_jsfeat_code_corners.TL_code_corner.y + "), TR, BL");
@@ -1424,6 +1458,282 @@ function showSpinnerUI(spinnerId) {
     } else {
         console.warn("Spinner UI element not found:", spinnerId);
     }
+}
+
+/**
+ * Extracts all potential cells from an image based on color and geometric filtering.
+ * @param {ImageData} imageData - The raw image data from a canvas.
+ * @param {{r:number, g:number, b:number}} backgroundColorRGB - The RGB color of the background to ignore.
+ * @param {Object} cellColorsRGBMap - A map of color names to RGB values for valid cell colors (e.g., CUST_CODEC_COLOR_RGB_MAP).
+ * @param {number} colorMatchThreshold - Max distance for a cell's average color to match a color in cellColorsRGBMap.
+ * @param {Object} geometricFilters - Object with { min_cell_area, max_cell_area, min_cell_aspect_ratio, max_cell_aspect_ratio }.
+ * @returns {Array<Object>} An array of cell objects: { x, y, width, height, centerX, centerY, colorName }.
+ */
+function extractAllCells(imageData, backgroundColorRGB, cellColorsRGBMap, colorMatchThreshold, geometricFilters) {
+    window.logToScreen("extractAllCells: Processing started.");
+    const { width, height, data } = imageData;
+    const { min_cell_area, max_cell_area, min_cell_aspect_ratio, max_cell_aspect_ratio } = geometricFilters;
+    const BG_DISTANCE_THRESHOLD = 50; // Threshold to distinguish cell content from background
+
+    // 1a. Create a binary mask
+    let binary_mask_matrix = new jsfeat.matrix_t(width, height, jsfeat.U8_t | jsfeat.C1_t);
+    let current_pixel_rgb = { r: 0, g: 0, b: 0 };
+
+    for (let y_idx = 0; y_idx < height; y_idx++) {
+        for (let x_idx = 0; x_idx < width; x_idx++) {
+            const i = (y_idx * width + x_idx) * 4;
+            current_pixel_rgb.r = data[i];
+            current_pixel_rgb.g = data[i + 1];
+            current_pixel_rgb.b = data[i + 2];
+
+            if (calculateColorDistance(current_pixel_rgb, backgroundColorRGB) > BG_DISTANCE_THRESHOLD) {
+                binary_mask_matrix.data[y_idx * width + x_idx] = 255; // Foreground (potential cell part)
+            } else {
+                binary_mask_matrix.data[y_idx * width + x_idx] = 0;   // Background
+            }
+        }
+    }
+    window.logToScreen("extractAllCells: Binary mask created against background.");
+
+    // 1b. Perform CCL
+    const labels_matrix = connectedComponentsLabeling_jsfeat(binary_mask_matrix);
+    // 1c. Analyze blobs
+    const raw_blobs = analyzeBlobs_jsfeat(labels_matrix, binary_mask_matrix);
+    window.logToScreen(`extractAllCells: Found ${raw_blobs.length} raw blobs from mask.`);
+
+    const potential_cells = [];
+    // 1d. Filter blobs
+    for (const blob of raw_blobs) {
+        const aspect_ratio = blob.width / blob.height;
+        if (blob.area >= min_cell_area &&
+            blob.area <= max_cell_area &&
+            aspect_ratio >= min_cell_aspect_ratio &&
+            aspect_ratio <= max_cell_aspect_ratio) {
+            
+            // 1e. Calculate average RGB color of the blob from original imageData
+            let sum_r = 0, sum_g = 0, sum_b = 0;
+            let num_blob_pixels = 0;
+            // Iterate only over pixels within the blob's bounding box for efficiency
+            for (let y_blob = blob.y; y_blob < blob.y + blob.height; y_blob++) {
+                for (let x_blob = blob.x; x_blob < blob.x + blob.width; x_blob++) {
+                    // Check if the pixel from labels_matrix actually belongs to this blob
+                    // to avoid including background pixels if bounding box is not tight.
+                    // This check is only strictly necessary if analyzeBlobs_jsfeat doesn't give pixel lists.
+                    // Assuming it does for now, or that the binary mask was accurate enough for the blob.
+                    // A simpler way is to just sample pixels from original image within blob bounds.
+                    const i_blob = (y_blob * width + x_blob) * 4;
+                    sum_r += data[i_blob];
+                    sum_g += data[i_blob + 1];
+                    sum_b += data[i_blob + 2];
+                    num_blob_pixels++;
+                }
+            }
+            
+            if (num_blob_pixels === 0) continue; // Should not happen for valid blobs
+
+            const avg_blob_color = {
+                r: sum_r / num_blob_pixels,
+                g: sum_g / num_blob_pixels,
+                b: sum_b / num_blob_pixels
+            };
+
+            // 1e.ii. Find best matching color name
+            let min_dist = Infinity;
+            let identifiedColorName = 'unknown';
+            for (const colorName in cellColorsRGBMap) {
+                if (colorName === 'background') continue; // Don't match to background color
+                const dist = calculateColorDistance(avg_blob_color, cellColorsRGBMap[colorName]);
+                if (dist < min_dist) {
+                    min_dist = dist;
+                    identifiedColorName = colorName;
+                }
+            }
+
+            if (min_dist <= colorMatchThreshold) {
+                 potential_cells.push({
+                    x: blob.x, y: blob.y, width: blob.width, height: blob.height,
+                    centerX: blob.x + blob.width / 2,
+                    centerY: blob.y + blob.height / 2,
+                    colorName: identifiedColorName,
+                    area: blob.area // Keep area for potential later use
+                });
+            }
+        }
+    }
+    
+    // 1f. Sort cells by Y then X
+    potential_cells.sort((a, b) => {
+        if (a.centerY < b.centerY) return -1;
+        if (a.centerY > b.centerY) return 1;
+        if (a.centerX < b.centerX) return -1;
+        if (a.centerX > b.centerX) return 1;
+        return 0;
+    });
+
+    window.logToScreen(`extractAllCells: Found ${potential_cells.length} potential cells after filtering.`);
+    return potential_cells;
+}
+
+/**
+ * Finds 3x3 marker patterns from a list of identified cells.
+ * @param {Array<Object>} allCells - Array of cell objects from extractAllCells.
+ * @param {Array<Array<String>>} markerCellPattern - A 3x3 array of expected color names for the marker.
+ * @param {number} avgCellWidth - Estimated average width of a cell.
+ * @param {number} avgCellHeight - Estimated average height of a cell.
+ * @param {number} gapToleranceFactor - A factor for positional tolerance (e.g., 0.75 means +/- 75% of cell dim).
+ * @returns {Array<Object>} An array of found marker objects, each with x, y, width, height, area, points.
+ */
+function findMarkersFromCells(allCells, markerCellPattern, avgCellWidth, avgCellHeight, gapToleranceFactor) {
+    window.logToScreen(`findMarkersFromCells: Starting with ${allCells.length} cells. AvgCellW: ${avgCellWidth.toFixed(1)}, AvgCellH: ${avgCellHeight.toFixed(1)}`);
+    const foundMarkers = [];
+    if (allCells.length < 9) return foundMarkers; // Not enough cells for even one marker
+
+    const MAX_DIST_X = avgCellWidth * (1 + gapToleranceFactor);
+    const MAX_DIST_Y = avgCellHeight * (1 + gapToleranceFactor);
+
+    // Helper to find a cell near a target location with a specific color
+    function findCellNear(targetX, targetY, expectedColor, availableCells, searchRadiusX, searchRadiusY) {
+        let bestCandidate = null;
+        let smallestDistSq = Infinity;
+
+        for (const cell of availableCells) {
+            if (cell.colorName === expectedColor) {
+                const dx = cell.centerX - targetX;
+                const dy = cell.centerY - targetY;
+                const distSq = dx * dx + dy * dy;
+
+                if (Math.abs(dx) < searchRadiusX && Math.abs(dy) < searchRadiusY) {
+                    if (distSq < smallestDistSq) {
+                        smallestDistSq = distSq;
+                        bestCandidate = cell;
+                    }
+                }
+            }
+        }
+        return bestCandidate;
+    }
+
+    for (let i = 0; i < allCells.length; i++) {
+        const cell_00 = allCells[i];
+        if (cell_00.colorName !== markerCellPattern[0][0]) continue;
+
+        let currentMarkerCells = Array(3).fill(null).map(() => Array(3).fill(null));
+        currentMarkerCells[0][0] = cell_00;
+        let possibleMatch = true;
+
+        // Try to find the rest of the 3x3 pattern
+        for (let r = 0; r < 3; r++) {
+            for (let c = 0; c < 3; c++) {
+                if (r === 0 && c === 0) continue; // cell_00 is already set
+
+                const expectedColor = markerCellPattern[r][c];
+                let anchorCell, targetX, targetY;
+
+                if (c > 0) { // Prefer finding based on the cell to the left
+                    anchorCell = currentMarkerCells[r][c-1];
+                    if (!anchorCell) { possibleMatch = false; break; }
+                    targetX = anchorCell.centerX + avgCellWidth;
+                    targetY = anchorCell.centerY;
+                } else { // Must be c === 0 and r > 0, find based on the cell above
+                    anchorCell = currentMarkerCells[r-1][c];
+                    if (!anchorCell) { possibleMatch = false; break; }
+                    targetX = anchorCell.centerX;
+                    targetY = anchorCell.centerY + avgCellHeight;
+                }
+                
+                // Define a search area around the targetX, targetY
+                // Cells already used in this potential marker should not be reused.
+                // For simplicity, we search in `allCells` and check later if a cell is reused.
+                // A more robust approach would filter `allCells` to exclude already assigned cells.
+                const foundCell = findCellNear(targetX, targetY, expectedColor, allCells, MAX_DIST_X, MAX_DIST_Y);
+
+                if (foundCell) {
+                    // Check if foundCell is already in currentMarkerCells
+                    let isReused = false;
+                    for(let pr=0; pr<3; pr++) for(let pc=0; pc<3; pc++) {
+                        if(currentMarkerCells[pr][pc] === foundCell) isReused = true;
+                    }
+                    if(isReused && !(r === 0 && c === 0)) { // Allow cell_00 to be "reused" by itself
+                         possibleMatch = false; break;
+                    }
+                    currentMarkerCells[r][c] = foundCell;
+                } else {
+                    possibleMatch = false; break;
+                }
+            }
+            if (!possibleMatch) break;
+        }
+
+        if (possibleMatch) {
+            // Geometric consistency (basic for now: bounding box)
+            const c00 = currentMarkerCells[0][0]; const c02 = currentMarkerCells[0][2];
+            const c20 = currentMarkerCells[2][0]; const c22 = currentMarkerCells[2][2];
+
+            if (!(c00 && c02 && c20 && c22)) {
+                window.logToScreen("findMarkersFromCells: Marker candidate missing corner cells for geometry check.");
+                continue;
+            }
+            
+            const markerX = c00.x;
+            const markerY = c00.y;
+            // Width from left of cell_00 to right of cell_02 (or cell_12, cell_22)
+            // Height from top of cell_00 to bottom of cell_20 (or cell_21, cell_22)
+            // Choose the outermost points for width/height
+            const markerWidth = (c02.x + c02.width) - c00.x;
+            const markerHeight = (c22.y + c22.height) - c00.y; // Using c22 for bottom-most extent
+
+            // Further checks: e.g. ensure columns are roughly aligned, rows aligned.
+            // Example: center X of c00, c10, c20 should be similar. Center Y of c00, c01, c02 similar.
+            let colAlignmentPass = true;
+            for(let col_idx=0; col_idx < 3; col_idx++) {
+                if (!currentMarkerCells[0][col_idx] || !currentMarkerCells[1][col_idx] || !currentMarkerCells[2][col_idx]) {
+                    colAlignmentPass = false; break;
+                }
+                const x_c0 = currentMarkerCells[0][col_idx].centerX;
+                const x_c1 = currentMarkerCells[1][col_idx].centerX;
+                const x_c2 = currentMarkerCells[2][col_idx].centerX;
+                if (Math.abs(x_c0 - x_c1) > MAX_DIST_X || Math.abs(x_c1 - x_c2) > MAX_DIST_X || Math.abs(x_c0 - x_c2) > MAX_DIST_X) {
+                    colAlignmentPass = false; break;
+                }
+            }
+             let rowAlignmentPass = true;
+            for(let row_idx=0; row_idx < 3; row_idx++) {
+                 if (!currentMarkerCells[row_idx][0] || !currentMarkerCells[row_idx][1] || !currentMarkerCells[row_idx][2]) {
+                    rowAlignmentPass = false; break;
+                }
+                const y_r0 = currentMarkerCells[row_idx][0].centerY;
+                const y_r1 = currentMarkerCells[row_idx][1].centerY;
+                const y_r2 = currentMarkerCells[row_idx][2].centerY;
+                 if (Math.abs(y_r0 - y_r1) > MAX_DIST_Y || Math.abs(y_r1 - y_r2) > MAX_DIST_Y || Math.abs(y_r0 - y_r2) > MAX_DIST_Y) {
+                    rowAlignmentPass = false; break;
+                }
+            }
+
+            if (!colAlignmentPass || !rowAlignmentPass) {
+                 window.logToScreen("findMarkersFromCells: Marker candidate failed row/column alignment checks.");
+                 continue;
+            }
+
+
+            if (markerWidth > 0 && markerHeight > 0) {
+                foundMarkers.push({
+                    x: markerX, y: markerY, width: markerWidth, height: markerHeight,
+                    area: markerWidth * markerHeight,
+                    points: [ // TL, TR, BR, BL of the marker bounding box
+                        { x: markerX, y: markerY },
+                        { x: markerX + markerWidth, y: markerY },
+                        { x: markerX + markerWidth, y: markerY + markerHeight },
+                        { x: markerX, y: markerY + markerHeight }
+                    ],
+                    // Optional: store the constituent cells for debugging
+                    // constituentCells: currentMarkerCells.flat().filter(Boolean) 
+                });
+            }
+        }
+    }
+
+    window.logToScreen(`findMarkersFromCells: Found ${foundMarkers.length} raw marker patterns.`);
+    return foundMarkers;
 }
 
 // --- Image Processing Logic Tests ---
